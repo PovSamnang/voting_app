@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Admin — Print Voter QR</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .card { border: 1px solid #ddd; padding: 8px; text-align:center; }
+    .qr { width: 180px; height: 180px; object-fit: contain; margin: 8px auto; }
+    .controls { margin-bottom: 12px; }
+    button { padding: 8px 12px; }
+  </style>
+</head>
+<body>
+  <h2>Admin — Voter QR Print</h2>
+  <div class="controls">
+    <button id="btnLoad">Load Voters</button>
+    <button id="btnPrintAll">Print All Visible</button>
+  </div>
+  <div id="grid" class="grid"></div>
+
+  <script>
+    document.getElementById('btnLoad').onclick = async () => {
+      const grid = document.getElementById('grid');
+      grid.innerHTML = 'Loading...';
+      try {
+        const res = await fetch('/api/admin/voters');
+        const rows = await res.json();
+        grid.innerHTML = '';
+        rows.forEach(r => {
+          const div = document.createElement('div');
+          div.className = 'card';
+          const img = document.createElement('img');
+          img.className = 'qr';
+          // qr_png_path likely is server path like /full/path/to/uploads/..
+          // Convert to public URL if needed. If qr_png_path is stored as absolute path,
+          // Ensure your server exposes /uploads/permanent_qr as static.
+          // For simplicity assume qr_png_path is under '/uploads/permanent_qr/filename.png'
+          img.src = r.qr_png_path.replace(/\\/g, '/');
+          img.onerror = () => img.style.opacity = '0.3';
+          div.appendChild(img);
+          const name = document.createElement('div');
+          name.textContent = `${r.id_number} — ${r.name_en}`;
+          div.appendChild(name);
+          grid.appendChild(div);
+        });
+      } catch (e) {
+        grid.innerHTML = 'Error loading voters';
+        console.error(e);
+      }
+    };
+
+    document.getElementById('btnPrintAll').onclick = () => {
+      window.print();
+    };
+  </script>
+</body>
+</html>
