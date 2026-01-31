@@ -20,7 +20,7 @@ async function loadAndResizeImages() {
   const fileNames = ["1.jpg", "2.jpg", "3.jpg", "4.jpg"]; 
   const resizedImages = [];
 
-  console.log("🔄 Processing and resizing images...");
+  console.log(" Processing and resizing images...");
 
   for (const file of fileNames) {
     const filePath = path.join(photosDir, file);
