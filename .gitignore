@@ -1,7 +1,12 @@
+# uploads
+backend/uploads/
+backend/uploads/id_cards/
+
 # Miscellaneous
 *.class
 *.log
 *.pyc
+
 *.swp
 .DS_Store
 .atom/
