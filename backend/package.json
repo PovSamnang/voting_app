@@ -4,12 +4,12 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "generate": "node generator/generateFakeUsers.js"
+    "generate": "node generator/generateFakeUsers.js",
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "@faker-js/faker": "^10.1.0",
     "axios": "^1.13.2",
@@ -30,6 +30,8 @@
     "sequelize": "^6.37.7",
     "sequelize-cli": "^6.6.3",
     "sharp": "^0.34.5",
+    "solc": "^0.8.34",
     "uuid": "^13.0.0"
-  }
+  },
+  "description": ""
 }

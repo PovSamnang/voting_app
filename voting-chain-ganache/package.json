@@ -8,13 +8,13 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "type": "module",
   "dependencies": {
     "dotenv": "^17.2.4",
     "ethers": "^6.16.0",
     "multer": "^2.0.2",
     "nodemailer": "^8.0.1",
-    "solc": "^0.8.33"
-  }
+    "solc": "^0.8.34"
+  },
+  "description": ""
 }
