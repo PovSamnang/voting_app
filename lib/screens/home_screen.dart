@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:voting_app/screens/login_screen.dart';
+import 'package:voting_app/screens/candidate_list_screen.dart';
 //import 'package:voting_blockchain_app/screens/login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -62,11 +63,12 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 40),
             ElevatedButton(
               onPressed: () {
-                // nis tok navigation to the Candidate list later
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Loading Candidates... (Backend pending)")),
-                );
-              },
+  Navigator.push(
+    context,
+    MaterialPageRoute(builder: (_) => const CandidateListScreen()),
+  );
+},
+              
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
               ),

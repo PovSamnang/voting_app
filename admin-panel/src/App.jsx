@@ -17,7 +17,7 @@ export default function RegisterRequestToken() {
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
 
-  const [msg, setMsg] = useState(null); // {type:'success'|'danger'|'info', text:string}
+  const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const onChange = (e) => setF((p) => ({ ...p, [e.target.name]: e.target.value }));
@@ -56,7 +56,7 @@ export default function RegisterRequestToken() {
       fd.append("name_en", f.name_en.trim());
       fd.append("phone", f.phone.trim());
       fd.append("email", f.email.trim());
-      fd.append("id_card_image", file); // ✅ must match backend field name
+      fd.append("id_card_image", file);
 
       const res = await axios.post(`${API_URL}/register-request-token`, fd, {
         headers: { "Content-Type": "multipart/form-data" },
@@ -64,12 +64,16 @@ export default function RegisterRequestToken() {
 
       setMsg({
         type: "success",
-        text: `${res.data?.message || "Success"}${res.data?.tx_hash ? ` (TX: ${res.data.tx_hash})` : ""}`,
+        text: `${res.data?.message || "Success"}${
+          res.data?.tx_hash ? ` (TX: ${res.data.tx_hash})` : ""
+        }`,
       });
     } catch (err) {
+      const data = err?.response?.data;
+      const extra = data?.reason ? ` (${data.reason})` : "";
       setMsg({
         type: "danger",
-        text: err?.response?.data?.message || err.message || "Request failed",
+        text: `${data?.message || err.message || "Request failed"}${extra}`,
       });
     } finally {
       setLoading(false);
@@ -82,7 +86,8 @@ export default function RegisterRequestToken() {
         <div>
           <h3 className="mb-1">🪪 Voter Registration</h3>
           <div className="text-muted">
-            Fill your ID info + phone/email. If valid (age ≥ 18 & not expired), blockchain will generate a token and email it to you.
+            Fill your ID info + phone/email. Upload a clear ID card photo with QR visible.
+            If valid (age ≥ 18 & not expired), blockchain will generate a token and email it to you.
           </div>
         </div>
       </div>
@@ -92,7 +97,6 @@ export default function RegisterRequestToken() {
       <div className="card shadow-sm">
         <div className="card-body p-4">
           <form onSubmit={submit} className="row g-3">
-            {/* ID number */}
             <div className="col-md-6">
               <label className="form-label fw-semibold">ID Number</label>
               <input
@@ -105,7 +109,6 @@ export default function RegisterRequestToken() {
               />
             </div>
 
-            {/* Phone */}
             <div className="col-md-6">
               <label className="form-label fw-semibold">Phone</label>
               <input
@@ -118,7 +121,6 @@ export default function RegisterRequestToken() {
               />
             </div>
 
-            {/* Name KH */}
             <div className="col-md-6">
               <label className="form-label fw-semibold">Name (KH)</label>
               <input
@@ -131,7 +133,6 @@ export default function RegisterRequestToken() {
               />
             </div>
 
-            {/* Name EN */}
             <div className="col-md-6">
               <label className="form-label fw-semibold">Name (EN)</label>
               <input
@@ -144,7 +145,6 @@ export default function RegisterRequestToken() {
               />
             </div>
 
-            {/* Email */}
             <div className="col-md-6">
               <label className="form-label fw-semibold">Email</label>
               <input
@@ -156,12 +156,9 @@ export default function RegisterRequestToken() {
                 placeholder="e.g. you@gmail.com"
                 required
               />
-              <div className="form-text">
-                Token will be sent to this email.
-              </div>
+              <div className="form-text">Token will be sent to this email.</div>
             </div>
 
-            {/* Upload */}
             <div className="col-md-6">
               <label className="form-label fw-semibold">Upload ID Card Image</label>
               <input
@@ -171,10 +168,9 @@ export default function RegisterRequestToken() {
                 onChange={onPickFile}
                 required
               />
-              <div className="form-text">JPG/PNG up to 6MB.</div>
+              <div className="form-text">JPG/PNG up to 6MB (QR must be visible).</div>
             </div>
 
-            {/* Preview */}
             <div className="col-12">
               <div className="border rounded-3 p-3 bg-light">
                 <div className="d-flex align-items-center justify-content-between">
@@ -212,26 +208,19 @@ export default function RegisterRequestToken() {
               </div>
             </div>
 
-            {/* Buttons */}
             <div className="col-12 d-flex gap-2">
               <button className="btn btn-success flex-grow-1" disabled={loading}>
                 {loading ? "Processing..." : "Confirm & Send Token"}
               </button>
 
-              <button
-                type="button"
-                className="btn btn-outline-secondary"
-                onClick={reset}
-                disabled={loading}
-              >
+              <button type="button" className="btn btn-outline-secondary" onClick={reset} disabled={loading}>
                 Reset
               </button>
             </div>
 
-            {/* Small note */}
             <div className="col-12">
               <div className="small text-muted">
-                Note: Your input name must match the voter database exactly. If valid, you will receive a blockchain-generated token by email.
+                Note: Your input name must match the voter database exactly. Upload the correct ID card photo (QR visible).
               </div>
             </div>
           </form>
