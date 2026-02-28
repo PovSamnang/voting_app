@@ -977,7 +977,12 @@ app.post("/api/vote", authRequired, async (req, res) => {
       err?.reason ||
       err?.message ||
       "";
+    if (msg.includes("Voting not active")) 
+      return res.status(403).json({ message: "Voting not active" });
 
+    if (msg.includes("Already voted")) 
+      return res.status(403).json({ message: "Already voted" });
+    
     if (msg.includes("Invalid/expired/used token"))
       return res.status(401).json({ message: "Invalid/expired/used token" });
 
@@ -988,6 +993,7 @@ app.post("/api/vote", authRequired, async (req, res) => {
       return res.status(400).json({ message: "Candidate inactive" });
 
     return res.status(500).json({ message: "Vote failed", error: msg });
+    
   }
 });
 
@@ -1022,6 +1028,45 @@ app.post("/api/debug-token", authRequired, async (req, res) => {
     return res.status(500).json({ message: "debug-token failed", error: String(e.message || e) });
   }
 });
+
+// Admin sets voting period (unix seconds)
+app.post("/api/admin/voting-period", adminRequired, async (req, res) => {
+  try {
+    const { start_ts, end_ts } = req.body; // seconds
+    const start = Number(start_ts);
+    const end = Number(end_ts);
+
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return res.status(400).json({ message: "start_ts and end_ts must be unix seconds" });
+    }
+
+    const c = getTokenContract();
+    const tx = await c.setVotingPeriod(start, end);
+    await tx.wait();
+
+    return res.json({ message: "Voting period set", tx_hash: tx.hash, start_ts: start, end_ts: end });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Set voting period failed", error: err.message });
+  }
+});
+
+// Public status (useful for mobile/web UI)
+app.get("/api/voting-status", async (_req, res) => {
+  try {
+    const c = getTokenContract();
+    const start = Number(await c.votingStart());
+    const end = Number(await c.votingEnd());
+    const configured = Boolean(await c.votingConfigured());
+    const active = Boolean(await c.isVotingActive());
+
+    return res.json({ configured, active, start_ts: start, end_ts: end });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Fetch voting status failed", error: err.message });
+  }
+});
+
 
 // OPTIONAL: keep old verify endpoint but lock it to logged-in user only
 app.post("/api/verify-voting-token", authRequired, async (req, res) => {

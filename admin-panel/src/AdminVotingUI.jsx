@@ -2,6 +2,24 @@ import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
 
+function tsToLocalInput(tsSec) {
+  if (!tsSec || tsSec <= 0) return "";
+  const d = new Date(tsSec * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  // datetime-local expects: YYYY-MM-DDTHH:mm
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}`;
+}
+
+function localInputToTsSec(v) {
+  // v: "YYYY-MM-DDTHH:mm"
+  const d = new Date(v);
+  const ms = d.getTime();
+  if (Number.isNaN(ms)) return null;
+  return Math.floor(ms / 1000);
+}
+
 export default function AdminVotingUI() {
   const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
   const ADMIN_KEY = import.meta.env.VITE_ADMIN_KEY || "";
@@ -13,6 +31,7 @@ export default function AdminVotingUI() {
     });
   }, [API_URL, ADMIN_KEY]);
 
+  // Candidate form
   const [form, setForm] = useState({
     name_en: "",
     name_kh: "",
@@ -20,9 +39,23 @@ export default function AdminVotingUI() {
     photo_url: "",
   });
 
+  // Voting window form (datetime-local)
+  const [period, setPeriod] = useState({
+    startLocal: "",
+    endLocal: "",
+  });
+
+  const [status, setStatus] = useState({
+    configured: false,
+    active: false,
+    start_ts: 0,
+    end_ts: 0,
+  });
+
   const [rows, setRows] = useState([]);
   const [msg, setMsg] = useState(null); // {type:'success'|'danger'|'info', text:''}
   const [loading, setLoading] = useState(false);
+  const [loadingPeriod, setLoadingPeriod] = useState(false);
 
   const onChange = (e) => setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
 
@@ -38,12 +71,41 @@ export default function AdminVotingUI() {
     }
   };
 
+  const loadVotingStatus = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/voting-status`);
+      const s = res.data || {};
+      setStatus({
+        configured: Boolean(s.configured),
+        active: Boolean(s.active),
+        start_ts: Number(s.start_ts || 0),
+        end_ts: Number(s.end_ts || 0),
+      });
+
+      setPeriod({
+        startLocal: tsToLocalInput(Number(s.start_ts || 0)),
+        endLocal: tsToLocalInput(Number(s.end_ts || 0)),
+      });
+    } catch (err) {
+      // voting-status is optional if backend not updated yet
+      setMsg({
+        type: "danger",
+        text:
+          err?.response?.data?.message ||
+          err.message ||
+          "Failed to load voting status (check backend /api/voting-status)",
+      });
+    }
+  };
+
   useEffect(() => {
     if (!ADMIN_KEY) {
       setMsg({ type: "danger", text: "Missing VITE_ADMIN_KEY in admin .env" });
       return;
     }
+
     loadResults();
+    loadVotingStatus();
 
     // Auto refresh results every 3 seconds
     const t = setInterval(loadResults, 3000);
@@ -86,7 +148,52 @@ export default function AdminVotingUI() {
     }
   };
 
+  const setVotingPeriod = async (e) => {
+    e.preventDefault();
+    setMsg(null);
+
+    const start_ts = localInputToTsSec(period.startLocal);
+    const end_ts = localInputToTsSec(period.endLocal);
+
+    if (!start_ts || !end_ts) {
+      setMsg({ type: "danger", text: "Please select valid Start and End datetime." });
+      return;
+    }
+    if (end_ts <= start_ts) {
+      setMsg({ type: "danger", text: "End time must be after Start time." });
+      return;
+    }
+
+    try {
+      setLoadingPeriod(true);
+      const res = await api.post("/admin/voting-period", { start_ts, end_ts });
+
+      setMsg({
+        type: "success",
+        text: `Voting period set ✅ ${res.data?.tx_hash ? `(TX: ${res.data.tx_hash})` : ""}`,
+      });
+
+      await loadVotingStatus();
+    } catch (err) {
+      setMsg({
+        type: "danger",
+        text:
+          err?.response?.data?.message ||
+          err.message ||
+          "Set voting period failed (check backend /api/admin/voting-period)",
+      });
+    } finally {
+      setLoadingPeriod(false);
+    }
+  };
+
   const totalVotes = rows.reduce((s, r) => s + Number(r.voteCount || 0), 0);
+
+  const statusBadge = status.active
+    ? { cls: "bg-success", text: "ACTIVE" }
+    : status.configured
+    ? { cls: "bg-secondary", text: "INACTIVE" }
+    : { cls: "bg-warning text-dark", text: "NOT SET" };
 
   return (
     <div className="container py-4" style={{ maxWidth: 980 }}>
@@ -94,7 +201,7 @@ export default function AdminVotingUI() {
         <div>
           <h3 className="mb-1">🛠️ Admin Voting Panel</h3>
           <div className="text-muted">
-            Add candidates (add-only) and view live results. Admin cannot see who voted for who.
+            Add candidates and view live results. Set voting start/end. Admin cannot see who voted for who.
           </div>
         </div>
 
@@ -105,6 +212,68 @@ export default function AdminVotingUI() {
       </div>
 
       {msg && <div className={`alert alert-${msg.type} shadow-sm`}>{msg.text}</div>}
+
+      {/* Voting Period */}
+      <div className="card shadow-sm mb-4">
+        <div className="card-body p-4">
+          <div className="d-flex align-items-center justify-content-between mb-3">
+            <h5 className="mb-0">⏳ Voting Period</h5>
+            <span className={`badge ${statusBadge.cls}`}>{statusBadge.text}</span>
+          </div>
+
+          <div className="mb-2 text-muted small">
+            Current:
+            {" "}
+            {status.start_ts ? new Date(status.start_ts * 1000).toLocaleString() : "—"}
+            {" "}
+            →{" "}
+            {status.end_ts ? new Date(status.end_ts * 1000).toLocaleString() : "—"}
+          </div>
+
+          <form onSubmit={setVotingPeriod} className="row g-3">
+            <div className="col-md-6">
+              <label className="form-label fw-semibold">Start (local time)</label>
+              <input
+                className="form-control"
+                type="datetime-local"
+                value={period.startLocal}
+                onChange={(e) => setPeriod((p) => ({ ...p, startLocal: e.target.value }))}
+                required
+              />
+            </div>
+
+            <div className="col-md-6">
+              <label className="form-label fw-semibold">End (local time)</label>
+              <input
+                className="form-control"
+                type="datetime-local"
+                value={period.endLocal}
+                onChange={(e) => setPeriod((p) => ({ ...p, endLocal: e.target.value }))}
+                required
+              />
+            </div>
+
+            <div className="col-12 d-flex gap-2">
+              <button className="btn btn-primary" disabled={loadingPeriod}>
+                {loadingPeriod ? "Saving..." : "Set Voting Period"}
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-outline-secondary"
+                disabled={loadingPeriod}
+                onClick={loadVotingStatus}
+              >
+                Reload Status
+              </button>
+
+              <div className="ms-auto small text-muted align-self-center">
+                Tip: Uses your computer’s timezone. For Phnom Penh, set your system timezone to Asia/Phnom_Penh.
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
 
       {/* Add Candidate */}
       <div className="card shadow-sm mb-4">
