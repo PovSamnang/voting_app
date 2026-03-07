@@ -4,20 +4,31 @@ import solc from "solc";
 import { ethers } from "ethers";
 
 const RPC_URL = "http://127.0.0.1:8545";
-const DEPLOYER_KEY = process.env.DEPLOYER_KEY; // Ganache private key 0x...
+const DEPLOYER_KEY = process.env.DEPLOYER_KEY;
 
 if (!DEPLOYER_KEY) {
   console.error("Missing DEPLOYER_KEY. Example:\nDEPLOYER_KEY=0x... node deploy.mjs");
   process.exit(1);
 }
 
-const source = fs.readFileSync(path.resolve("contracts/VotingTokenIssuer.sol"), "utf8");
+const sourcePath = path.resolve("contracts/VotingTokenIssuer.sol");
+const source = fs.readFileSync(sourcePath, "utf8");
 
+// const input = {
+//   language: "Solidity",
+//   sources: { "VotingTokenIssuer.sol": { content: source } },
+//   settings: {
+//     optimizer: { enabled: true, runs: 200 },
+//     outputSelection: { "*": { "*": ["abi", "evm.bytecode.object"] } },
+//   },
+// };
+//or 
 const input = {
   language: "Solidity",
   sources: { "VotingTokenIssuer.sol": { content: source } },
   settings: {
     optimizer: { enabled: true, runs: 200 },
+    evmVersion: "paris", // ✅ add this
     outputSelection: { "*": { "*": ["abi", "evm.bytecode.object"] } },
   },
 };
@@ -33,6 +44,13 @@ const c = output.contracts["VotingTokenIssuer.sol"]["VotingTokenIssuer"];
 const abi = c.abi;
 const bytecode = "0x" + c.evm.bytecode.object;
 
+// ✅ sanity: ABI must contain getCandidate
+const hasGetCandidate = abi.some((x) => x.type === "function" && x.name === "getCandidate");
+console.log("ABI has getCandidate:", hasGetCandidate);
+if (!hasGetCandidate) {
+  throw new Error("Your compiled ABI does NOT include getCandidate. You are compiling the wrong contract file.");
+}
+
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(DEPLOYER_KEY, provider);
 
@@ -43,13 +61,25 @@ const contract = await factory.deploy();
 await contract.waitForDeployment();
 
 const address = await contract.getAddress();
-console.log("✅ Contract deployed to:", address);
+console.log("✅ CONTRACT_ADDRESS:", address);
 
-// Save ABI for backend
-fs.mkdirSync("abi", { recursive: true });
-fs.writeFileSync("abi/VotingTokenIssuer.json", JSON.stringify(abi, null, 2));
-console.log("✅ ABI saved: abi/VotingTokenIssuer.json");
+// ✅ self-test: call getCandidate(1,1). It should NOT revert.
+const readOnly = new ethers.Contract(address, abi, provider);
+try {
+  const r = await readOnly.getCandidate(1, 1);
+  console.log("✅ getCandidate(1,1) call OK (no revert). Returned:", r);
+} catch (e) {
+  console.error("❌ getCandidate call reverted. This deploy is NOT correct.", e?.shortMessage || e?.message || e);
+  process.exit(1);
+}
 
+// ✅ write artifact for backend
+fs.mkdirSync("build", { recursive: true });
+fs.writeFileSync(
+  "build/VotingTokenIssuer.artifact.json",
+  JSON.stringify({ abi, bytecode }, null, 2)
+);
+console.log("✅ Artifact saved: build/VotingTokenIssuer.artifact.json");
 
 
 // import "dotenv/config";
