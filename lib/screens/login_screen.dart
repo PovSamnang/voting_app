@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:voting_app/screens/face_liveness_screen.dart';
 import 'package:voting_app/screens/home_screen.dart';
+import 'package:voting_app/screens/main_screen.dart';
 import 'package:voting_app/services/auth_service.dart';
+
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -308,7 +310,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (resultMessage == null) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
+        MaterialPageRoute(builder: (_) => const MainScreen()),
       );
     } else {
       setState(() => _errorMessage = resultMessage);

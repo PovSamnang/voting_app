@@ -1,235 +1,49 @@
-// src/RegisterRequestToken.jsx
-import { useState } from "react";
-import axios from "axios";
-import "bootstrap/dist/css/bootstrap.min.css";
+import { Routes, Route, Navigate } from "react-router-dom";
+import RegisterRequestToken from "./pages/user/RegisterRequestToken.jsx";
+import AdminLogin from "./pages/admin/AdminLogin.jsx";
+import AdminDashboard from "./pages/admin/AdminDashboard.jsx";
+import ProtectedAdminRoute from "./pages/admin/ProtectedAdminRoute.jsx";
+import ElectionAdmin from "./pages/admin/ElectionAdmin.jsx";
+import VotersAdmin from "./pages/admin/VotersAdmin.jsx";
+import NotFound from "./pages/NotFound.jsx";
 
-const API_URL = "http://localhost:3000/api";
-
-export default function RegisterRequestToken() {
-  const [f, setF] = useState({
-    id_number: "",
-    name_kh: "",
-    name_en: "",
-    phone: "",
-    email: "",
-  });
-
-  const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState(null);
-
-  const [msg, setMsg] = useState(null);
-  const [loading, setLoading] = useState(false);
-
-  const onChange = (e) => setF((p) => ({ ...p, [e.target.name]: e.target.value }));
-
-  const onPickFile = (e) => {
-    const picked = e.target.files?.[0] || null;
-    setFile(picked);
-
-    if (preview) URL.revokeObjectURL(preview);
-    setPreview(picked ? URL.createObjectURL(picked) : null);
-  };
-
-  const reset = () => {
-    setF({ id_number: "", name_kh: "", name_en: "", phone: "", email: "" });
-    setFile(null);
-    if (preview) URL.revokeObjectURL(preview);
-    setPreview(null);
-    setMsg(null);
-  };
-
-  const submit = async (e) => {
-    e.preventDefault();
-    setMsg(null);
-
-    if (!file) {
-      setMsg({ type: "danger", text: "Please upload your ID card image." });
-      return;
-    }
-
-    try {
-      setLoading(true);
-
-      const fd = new FormData();
-      fd.append("id_number", f.id_number.trim());
-      fd.append("name_kh", f.name_kh.trim());
-      fd.append("name_en", f.name_en.trim());
-      fd.append("phone", f.phone.trim());
-      fd.append("email", f.email.trim());
-      fd.append("id_card_image", file);
-
-      const res = await axios.post(`${API_URL}/register-request-token`, fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-
-      setMsg({
-        type: "success",
-        text: `${res.data?.message || "Success"}${
-          res.data?.tx_hash ? ` (TX: ${res.data.tx_hash})` : ""
-        }`,
-      });
-    } catch (err) {
-      const data = err?.response?.data;
-      const extra = data?.reason ? ` (${data.reason})` : "";
-      setMsg({
-        type: "danger",
-        text: `${data?.message || err.message || "Request failed"}${extra}`,
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
+export default function App() {
   return (
-    <div className="container py-4" style={{ maxWidth: 760 }}>
-      <div className="d-flex align-items-center justify-content-between mb-3">
-        <div>
-          <h3 className="mb-1">🪪 Voter Registration</h3>
-          <div className="text-muted">
-            Fill your ID info + phone/email. Upload a clear ID card photo with QR visible.
-            If valid (age ≥ 18 & not expired), blockchain will generate a token and email it to you.
-          </div>
-        </div>
-      </div>
+    <Routes>
+      {/* ✅ USER HOME */}
+      <Route path="/" element={<RegisterRequestToken />} />
 
-      {msg && <div className={`alert alert-${msg.type} shadow-sm`}>{msg.text}</div>}
+      {/* ✅ ADMIN LOGIN */}
+      <Route path="/admin/login" element={<AdminLogin />} />
 
-      <div className="card shadow-sm">
-        <div className="card-body p-4">
-          <form onSubmit={submit} className="row g-3">
-            <div className="col-md-6">
-              <label className="form-label fw-semibold">ID Number</label>
-              <input
-                className="form-control"
-                name="id_number"
-                value={f.id_number}
-                onChange={onChange}
-                placeholder="e.g. 1234567890"
-                required
-              />
-            </div>
+      {/* ✅ ADMIN PROTECTED */}
+      <Route
+        path="/admin"
+        element={
+          <ProtectedAdminRoute>
+            <AdminDashboard />
+          </ProtectedAdminRoute>
+        }
+      />
+      <Route
+        path="/admin/elections"
+        element={
+          <ProtectedAdminRoute>
+            <ElectionAdmin />
+          </ProtectedAdminRoute>
+        }
+      />
+      <Route
+        path="/admin/voters"
+        element={
+          <ProtectedAdminRoute>
+            <VotersAdmin />
+          </ProtectedAdminRoute>
+        }
+      />
 
-            <div className="col-md-6">
-              <label className="form-label fw-semibold">Phone</label>
-              <input
-                className="form-control"
-                name="phone"
-                value={f.phone}
-                onChange={onChange}
-                placeholder="e.g. 012345678"
-                required
-              />
-            </div>
-
-            <div className="col-md-6">
-              <label className="form-label fw-semibold">Name (KH)</label>
-              <input
-                className="form-control"
-                name="name_kh"
-                value={f.name_kh}
-                onChange={onChange}
-                placeholder="e.g. កែវ ដារ៉ា"
-                required
-              />
-            </div>
-
-            <div className="col-md-6">
-              <label className="form-label fw-semibold">Name (EN)</label>
-              <input
-                className="form-control"
-                name="name_en"
-                value={f.name_en}
-                onChange={onChange}
-                placeholder="e.g. KEO DARA"
-                required
-              />
-            </div>
-
-            <div className="col-md-6">
-              <label className="form-label fw-semibold">Email</label>
-              <input
-                className="form-control"
-                type="email"
-                name="email"
-                value={f.email}
-                onChange={onChange}
-                placeholder="e.g. you@gmail.com"
-                required
-              />
-              <div className="form-text">Token will be sent to this email.</div>
-            </div>
-
-            <div className="col-md-6">
-              <label className="form-label fw-semibold">Upload ID Card Image</label>
-              <input
-                className="form-control"
-                type="file"
-                accept="image/*"
-                onChange={onPickFile}
-                required
-              />
-              <div className="form-text">JPG/PNG up to 6MB (QR must be visible).</div>
-            </div>
-
-            <div className="col-12">
-              <div className="border rounded-3 p-3 bg-light">
-                <div className="d-flex align-items-center justify-content-between">
-                  <div className="fw-semibold">ID Card Preview</div>
-                  {preview && (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-outline-secondary"
-                      onClick={() => {
-                        setFile(null);
-                        if (preview) URL.revokeObjectURL(preview);
-                        setPreview(null);
-                      }}
-                    >
-                      Remove
-                    </button>
-                  )}
-                </div>
-                <div className="mt-3" style={{ minHeight: 120 }}>
-                  {preview ? (
-                    <img
-                      src={preview}
-                      alt="preview"
-                      style={{
-                        width: "100%",
-                        maxHeight: 280,
-                        objectFit: "contain",
-                        borderRadius: 10,
-                      }}
-                    />
-                  ) : (
-                    <div className="text-muted">No image selected.</div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="col-12 d-flex gap-2">
-              <button className="btn btn-success flex-grow-1" disabled={loading}>
-                {loading ? "Processing..." : "Confirm & Send Token"}
-              </button>
-
-              <button type="button" className="btn btn-outline-secondary" onClick={reset} disabled={loading}>
-                Reset
-              </button>
-            </div>
-
-            <div className="col-12">
-              <div className="small text-muted">
-                Note: Your input name must match the voter database exactly. Upload the correct ID card photo (QR visible).
-              </div>
-            </div>
-          </form>
-        </div>
-      </div>
-
-      <div className="mt-3 text-muted small">
-        Endpoint: <code>{API_URL}/register-request-token</code> (multipart/form-data)
-      </div>
-    </div>
+      {/* fallback */}
+      <Route path="*" element={<NotFound />} />
+    </Routes>
   );
 }

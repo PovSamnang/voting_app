@@ -98,16 +98,20 @@ function CandidateCell({ c }) {
   );
 }
 
-export default function AdminVotingUI() {
+export default function ElectionAdmin() {
   const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
   const ADMIN_KEY = import.meta.env.VITE_ADMIN_KEY || "";
 
   const api = useMemo(() => {
-    return axios.create({
-      baseURL: API_URL,
-      headers: { "x-admin-key": ADMIN_KEY },
-    });
-  }, [API_URL, ADMIN_KEY]);
+  const token = localStorage.getItem("admin_token") || "";
+  return axios.create({
+    baseURL: API_URL,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(ADMIN_KEY ? { "x-admin-key": ADMIN_KEY } : {}),
+    },
+  });
+}, [API_URL, ADMIN_KEY]);
 
   const [candForm, setCandForm] = useState({
     name_en: "",
@@ -241,7 +245,7 @@ export default function AdminVotingUI() {
       const res = await api.post("/admin/elections/draft");
       setMsg({
         type: "success",
-        text: `Draft election created ✅ (ID: ${res.data?.election_id ?? "?"})`,
+        text: `Draft election created  (ID: ${res.data?.election_id ?? "?"})`,
       });
       setCandForm({ name_en: "", name_kh: "", party: "", photo_url: "" });
       setPeriod({ startLocal: "", endLocal: "" });
@@ -280,7 +284,7 @@ export default function AdminVotingUI() {
       setBusy(true);
       await api.post("/admin/elections", { start_ts, end_ts });
 
-      setMsg({ type: "success", text: "Election period set ✅" });
+      setMsg({ type: "success", text: "Election period set " });
 
       await loadVotingStatus();
       await loadCurrentReport();
@@ -319,7 +323,7 @@ export default function AdminVotingUI() {
 
       setMsg({
         type: "success",
-        text: `Candidate added ✅ ${res.data?.tx_hash ? `(TX: ${res.data.tx_hash})` : ""}`,
+        text: `Candidate added  ${res.data?.tx_hash ? `(TX: ${res.data.tx_hash})` : ""}`,
       });
 
       setCandForm({ name_en: "", name_kh: "", party: "", photo_url: "" });

@@ -89,15 +89,25 @@ class AuthService {
       }),
     );
 
-    if (response.statusCode == 200) {
-      final body = json.decode(response.body);
-      final token = body['token'];
+      if (response.statusCode == 200) {
+    final body = json.decode(response.body);
+    final token = body['token'];
 
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('authToken', token);
+    final prefs = await SharedPreferences.getInstance();
 
-      return null;
+    // ✅ Save JWT (existing behavior)
+    await prefs.setString('authToken', token);
+
+    // ✅ NEW: Save voter info (SAFE ADDITION)
+    if (body['voter'] != null) {
+      await prefs.setString(
+        'voterData',
+        jsonEncode(body['voter']),
+      );
     }
+
+    return null;
+  }
 
     // safe decode (backend always returns json but just in case)
     try {

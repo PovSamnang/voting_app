@@ -1,13 +1,81 @@
 <!doctype html>
-<html lang="en">
+<html class="light" lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>admin-panel</title>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>Voter Registration - National Election Committee (NEC)</title>
+
+    <!-- Tailwind (CDN) -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+
+    <!-- Fonts -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Icons -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Tailwind config (match your HTML) -->
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              primary: "#003366",
+              gold: "#D4AF37",
+              "gold-light": "#F4E0A1",
+              "gov-red": "#E02020",
+              "background-light": "#F9FAFB",
+            },
+            fontFamily: {
+              display: ["Inter", "Kantumruy Pro", "sans-serif"],
+              khmer: ["Kantumruy Pro", "serif"],
+            },
+            backgroundImage: {
+              "kbach-pattern": "url('https://www.transparenttextures.com/patterns/natural-paper.png')",
+            },
+            borderRadius: {
+              DEFAULT: "0.125rem",
+              lg: "0.25rem",
+              xl: "0.5rem",
+              full: "9999px",
+            },
+          },
+        },
+      };
+    </script>
+
+    <style>
+      .khmer-motto {
+        font-family: "Kantumruy Pro", sans-serif;
+        letter-spacing: 0.05em;
+      }
+      .kbach-divider {
+        height: 4px;
+        background: repeating-linear-gradient(
+          90deg,
+          #d4af37,
+          #d4af37 10px,
+          #b8860b 10px,
+          #b8860b 20px
+        );
+      }
+    </style>
   </head>
-  <body>
+
+  <body class="bg-background-light font-display text-slate-900 min-h-screen">
     <div id="root"></div>
+    <!-- Vite -->
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

@@ -12,6 +12,8 @@ import multer from "multer";
 import nodemailer from "nodemailer";
 import { ethers } from "ethers";
 import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
+import crypto from "node:crypto";
 
 // ✅ QR decode deps
 import sharp from "sharp";
@@ -37,7 +39,7 @@ const PORT = Number(process.env.PORT || 3000);
 const DB_CONFIG = {
   host: process.env.DB_HOST || "localhost",
   user: process.env.DB_USER || "root",
-  password: process.env.DB_PASS || "",
+  password: process.env.DB_PASS || "Iphone168$$",
   database: process.env.DB_NAME || "voting_system",
 };
 
@@ -77,10 +79,27 @@ if (!FACE_API_KEY || !FACE_API_SECRET) {
 // MIDDLEWARES
 // =========================
 function adminRequired(req, res, next) {
+  // ✅ 1) Old method (keep for compatibility)
   const key = String(req.headers["x-admin-key"] || "");
-  if (!ADMIN_API_KEY) return res.status(500).json({ message: "ADMIN_API_KEY not set" });
-  if (key !== ADMIN_API_KEY) return res.status(403).json({ message: "Forbidden" });
-  next();
+  if (ADMIN_API_KEY && key && key === ADMIN_API_KEY) return next();
+
+  // ✅ 2) New method: Admin JWT
+  const h = String(req.headers.authorization || "");
+  const token = h.startsWith("Bearer ") ? h.slice(7) : "";
+
+  if (token) {
+    try {
+      const payload = jwt.verify(token, JWT_SECRET);
+      // Only allow admin tokens
+      if (payload?.type === "admin" && payload?.role === "admin") {
+        req.admin = payload;
+        return next();
+      }
+    } catch (_) {}
+  }
+
+  // If neither method worked
+  return res.status(403).json({ message: "Forbidden (admin auth required)" });
 }
 
 function authRequired(req, res, next) {
@@ -125,6 +144,22 @@ const upload = multer({
 // =========================
 // Helpers
 // =========================
+function sha256Hex(s) {
+  return crypto.createHash("sha256").update(String(s)).digest("hex");
+}
+
+function generateOtp6() {
+  return String(Math.floor(100000 + Math.random() * 900000)); // 6 digits
+}
+
+function signAdminToken(payload) {
+  return jwt.sign(
+    { ...payload, type: "admin", role: "admin" },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_SECONDS }
+  );
+}
+
 function normalizeName(s) {
   return String(s || "")
     .normalize("NFKC")
@@ -284,11 +319,11 @@ async function decodeQrFromImageFile(filePath) {
       try { reader.reset(); } catch {}
 
       if (text && String(text).trim()) {
-        if (QR_DEBUG) console.log("✅ QR decoded variant:", v.name, "=>", String(text).trim());
+        if (QR_DEBUG) console.log(" QR decoded variant:", v.name, "=>", String(text).trim());
         return String(text).trim();
       }
     } catch (e) {
-      if (QR_DEBUG) console.log("❌ QR decode fail variant:", v.name, "err:", String(e?.message || e));
+      if (QR_DEBUG) console.log(" QR decode fail variant:", v.name, "err:", String(e?.message || e));
       try { reader.reset(); } catch {}
     }
   }
@@ -323,6 +358,8 @@ async function sendEmail(to, subject, text) {
     secure,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
   });
+
+  await transporter.verify(); // ✅ temporary test (remove later if you want)
 
   await transporter.sendMail({
     from: process.env.MAIL_FROM,
@@ -549,6 +586,7 @@ app.post("/api/login", async (req, res) => {
         uuid: voter.uuid,
         id_number: voter.id_number,
         name: voter.name_en || voter.name_kh || "Voter",
+        photo: voter.photo || null   // ADD THIS LINE
       },
       confidence,
     });
@@ -645,7 +683,7 @@ app.post("/api/admin/elections", adminRequired, async (req, res) => {
   }
 });
 
-// ✅ List elections (history dropdown)
+//  List elections (history dropdown)
 app.get("/api/admin/elections", adminRequired, async (_req, res) => {
   try {
     const c = getTokenContract();
@@ -1248,6 +1286,156 @@ app.get("/api/admin/report/:electionId", adminRequired, async (req, res) => {
   } catch (e) {
     console.error("❌ REPORT BY ID ERROR:", e);
     return res.status(500).json({ message: "Report failed", error: String(e.message || e) });
+  } finally {
+    try { if (connection) await connection.end(); } catch {}
+  }
+});
+
+app.post("/api/admin/forgot-password", async (req, res) => {
+  let connection;
+  try {
+    const { email } = req.body || {};
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    if (!cleanEmail) return res.status(400).json({ message: "Missing email" });
+
+    // Always respond OK (avoid leaking if email exists)
+    connection = await mysql.createConnection(DB_CONFIG);
+
+    const [rows] = await connection.execute(
+      `SELECT id, email FROM admins WHERE email=? LIMIT 1`,
+      [cleanEmail]
+    );
+
+    if (!rows.length) {
+      return res.json({ message: "If the account exists, a reset code was sent." });
+    }
+
+    const admin = rows[0];
+
+    const otp = generateOtp6();
+    const resetId = crypto.randomBytes(16).toString("hex");
+
+    const otpHash = sha256Hex(otp + JWT_SECRET);
+    const resetIdHash = sha256Hex(resetId + JWT_SECRET);
+
+    const ttlMin = Number(process.env.ADMIN_RESET_TTL_MIN || "10"); // 10 minutes
+    const expires = new Date(Date.now() + ttlMin * 60 * 1000);
+
+    await connection.execute(
+      `UPDATE admins
+       SET reset_id_hash=?, reset_otp_hash=?, reset_expires_at=?, reset_attempts=0
+       WHERE id=?`,
+      [resetIdHash, otpHash, expires, admin.id]
+    );
+
+    await sendEmail(
+      cleanEmail,
+      "KampuVote Admin Password Reset Code",
+      `Your password reset code is: ${otp}\n\n` +
+      `Reset ID: ${resetId}\n\n` +
+      `This code expires in ${ttlMin} minutes.\n` +
+      `If you did not request this, ignore this email.`
+    );
+
+    // Frontend needs resetId to submit reset
+    return res.json({ message: "Reset code sent.", resetId });
+  } catch (e) {
+    return res.status(500).json({ message: "Forgot-password failed", error: String(e.message || e) });
+  } finally {
+    try { if (connection) await connection.end(); } catch {}
+  }
+});
+
+app.post("/api/admin/reset-password", async (req, res) => {
+  let connection;
+  try {
+    const { email, resetId, otp, new_password } = req.body || {};
+    const cleanEmail = String(email || "").trim().toLowerCase();
+
+    if (!cleanEmail || !resetId || !otp || !new_password) {
+      return res.status(400).json({ message: "Missing fields" });
+    }
+    if (String(new_password).length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters" });
+    }
+
+    connection = await mysql.createConnection(DB_CONFIG);
+
+    const [rows] = await connection.execute(
+      `SELECT id, reset_id_hash, reset_otp_hash, reset_expires_at, reset_attempts
+       FROM admins WHERE email=? LIMIT 1`,
+      [cleanEmail]
+    );
+
+    if (!rows.length) return res.status(400).json({ message: "Reset not allowed" });
+
+    const a = rows[0];
+    if (!a.reset_id_hash || !a.reset_otp_hash || !a.reset_expires_at) {
+      return res.status(400).json({ message: "No active reset request" });
+    }
+
+    if (new Date(a.reset_expires_at).getTime() < Date.now()) {
+      return res.status(400).json({ message: "Reset expired. Request again." });
+    }
+
+    if (Number(a.reset_attempts || 0) >= 5) {
+      return res.status(429).json({ message: "Too many attempts. Request again." });
+    }
+
+    const resetIdHash = sha256Hex(String(resetId) + JWT_SECRET);
+    const otpHash = sha256Hex(String(otp) + JWT_SECRET);
+
+    if (resetIdHash !== a.reset_id_hash || otpHash !== a.reset_otp_hash) {
+      await connection.execute(
+        `UPDATE admins SET reset_attempts = reset_attempts + 1 WHERE id=?`,
+        [a.id]
+      );
+      return res.status(401).json({ message: "Invalid reset code" });
+    }
+
+    const passHash = await bcrypt.hash(String(new_password), 10);
+
+    await connection.execute(
+      `UPDATE admins
+       SET password_hash=?,
+           reset_id_hash=NULL, reset_otp_hash=NULL, reset_expires_at=NULL, reset_attempts=0
+       WHERE id=?`,
+      [passHash, a.id]
+    );
+
+    return res.json({ message: "Password reset successful. Please login." });
+  } catch (e) {
+    return res.status(500).json({ message: "Reset-password failed", error: String(e.message || e) });
+  } finally {
+    try { if (connection) await connection.end(); } catch {}
+  }
+});
+
+app.post("/api/admin/login", async (req, res) => {
+  let connection;
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) return res.status(400).json({ message: "Missing username/password" });
+
+    connection = await mysql.createConnection(DB_CONFIG);
+
+    const [rows] = await connection.execute(
+      `SELECT id, username, email, password_hash FROM admins
+       WHERE username=? OR email=? LIMIT 1`,
+      [String(username).trim(), String(username).trim().toLowerCase()]
+    );
+
+    const admin = rows?.[0];
+    if (!admin) return res.status(401).json({ message: "Invalid credentials" });
+
+    const ok = await bcrypt.compare(String(password), String(admin.password_hash));
+    if (!ok) return res.status(401).json({ message: "Invalid credentials" });
+
+    const token = signAdminToken({ admin_id: admin.id, username: admin.username });
+
+    return res.json({ token, admin: { id: admin.id, username: admin.username, email: admin.email } });
+  } catch (e) {
+    return res.status(500).json({ message: "Admin login failed", error: String(e.message || e) });
   } finally {
     try { if (connection) await connection.end(); } catch {}
   }

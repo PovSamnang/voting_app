@@ -5,7 +5,7 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 
 const API_URL = 'http://localhost:3000/api';
 
-function App() {
+function VotersAdmin() {
   const [voters, setVoters] = useState([]);
   const [editingVoter, setEditingVoter] = useState(null);
   const [viewingCard, setViewingCard] = useState(null);
@@ -44,7 +44,7 @@ function App() {
 
   return (
     <div className="container mt-4">
-      <h1 className="mb-4 text-center">🗳️ Voting System Admin</h1>
+      <h1 className="mb-4 text-center"> Voting System Admin</h1>
 
       {/* edit*/}
       {editingVoter && (
@@ -410,4 +410,4 @@ const styles = {
   },
 };
 
-export default App;
+export default VotersAdmin;
