@@ -727,9 +727,9 @@ export default function RegisterRequestToken() {
                 </span>
                 HOME
               </a>
-              <a className="navA muted" href="#">
-                VERIFY STATUS
-              </a>
+              <Link className="navA muted" to="/official-voter-search">
+                ស្វែងរកឈ្មោះក្នុងបញ្ជីបោះឆ្នោតផ្លូវការ
+              </Link>
               <a className="navA muted" href="#">
                 POLLING STATIONS
               </a>

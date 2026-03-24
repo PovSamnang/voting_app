@@ -144,6 +144,202 @@ const upload = multer({
 // =========================
 // Helpers
 // =========================
+function addYearsToDDMMYYYY(ddmmyyyy, years = 10) {
+  const s = String(ddmmyyyy || "").trim();
+  const parts = s.split(".");
+  if (parts.length !== 3) {
+    throw new Error("Invalid issued_date format");
+  }
+
+  const [dd, mm, yyyy] = parts;
+  const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+
+  if (Number.isNaN(d.getTime())) {
+    throw new Error("Invalid issued_date value");
+  }
+
+  // strict validation
+  if (
+    d.getFullYear() !== Number(yyyy) ||
+    d.getMonth() !== Number(mm) - 1 ||
+    d.getDate() !== Number(dd)
+  ) {
+    throw new Error("Invalid issued_date value");
+  }
+
+  d.setFullYear(d.getFullYear() + years);
+
+  const outDd = String(d.getDate()).padStart(2, "0");
+  const outMm = String(d.getMonth() + 1).padStart(2, "0");
+  const outYyyy = String(d.getFullYear());
+
+  return `${outDd}.${outMm}.${outYyyy}`;
+}
+
+const DOC_CHANGE_FACE_MIN_CONF = Number(
+  process.env.DOC_CHANGE_FACE_MIN_CONF || LOGIN_FACE_MIN_CONF || "70"
+);
+
+const docChangeDir = path.resolve(
+  process.cwd(),
+  "uploads",
+  "document_change_requests"
+);
+fs.mkdirSync(docChangeDir, { recursive: true });
+
+function normalizeGenderKh(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (["m", "male", "ប្រុស"].includes(v)) return "ប្រុស";
+  if (["f", "female", "ស្រី"].includes(v)) return "ស្រី";
+  return "";
+}
+
+function buildDobFromParts(day, month, year) {
+  const dd = String(day || "").padStart(2, "0");
+  const mm = String(month || "").padStart(2, "0");
+  const yyyy = String(year || "").trim();
+
+  if (!dd || !mm || !yyyy || yyyy.length !== 4) return null;
+
+  const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+  if (Number.isNaN(d.getTime())) return null;
+
+  const same =
+    d.getFullYear() === Number(yyyy) &&
+    d.getMonth() === Number(mm) - 1 &&
+    d.getDate() === Number(dd);
+
+  if (!same) return null;
+
+  return {
+    dob_iso: `${yyyy}-${mm}-${dd}`,
+    dob_display: `${dd}.${mm}.${yyyy}`,
+  };
+}
+
+function samePersonByName(a, b) {
+  const aKh = normalizeName(a?.name_kh || "");
+  const bKh = normalizeName(b?.name_kh || "");
+  const aEn = normalizeName(a?.name_en || "");
+  const bEn = normalizeName(b?.name_en || "");
+
+  if (aKh && bKh && aKh === bKh) return true;
+  if (aEn && bEn && aEn === bEn) return true;
+  if (aKh && bEn && aKh === bEn) return true;
+  if (aEn && bKh && aEn === bKh) return true;
+
+  return false;
+}
+
+function makeRequestNo() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const rand = crypto.randomBytes(3).toString("hex").toUpperCase();
+  return `DCR-${y}${m}${d}-${rand}`;
+}
+
+function dataUrlToExt(dataUrl) {
+  const s = String(dataUrl || "");
+  if (s.startsWith("data:image/png")) return "png";
+  if (s.startsWith("data:image/webp")) return "webp";
+  return "jpg";
+}
+
+async function saveBase64ImageToUploads(dataUrl, prefix = "dcr") {
+  const raw = stripDataUrl(dataUrl);
+  if (!raw) return null;
+
+  const ext = dataUrlToExt(dataUrl);
+  const fileName = `${prefix}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.${ext}`;
+  const absPath = path.join(docChangeDir, fileName);
+
+  await fs.promises.writeFile(absPath, Buffer.from(raw, "base64"));
+  return `/uploads/document_change_requests/${fileName}`;
+}
+
+function publicPathToAbsolute(publicPath) {
+  return path.resolve(process.cwd(), String(publicPath || "").replace(/^\/+/, ""));
+}
+
+async function safeUnlinkPublicPath(publicPath) {
+  try {
+    const abs = publicPathToAbsolute(publicPath);
+    await safeUnlink(abs);
+  } catch (_) {}
+}
+
+async function verifyDocumentChangeForApproval(connection, requestRow) {
+  const [rows] = await connection.execute(
+    `SELECT uuid, id_number, name_kh, name_en, gender, dob_iso, photo, issued_date, expiry_date
+     FROM voters
+     WHERE uuid = ?
+     LIMIT 1`,
+    [requestRow.voter_uuid]
+  );
+
+  if (!rows.length) {
+    return { ok: false, status: 404, message: "Original voter not found" };
+  }
+
+  const oldVoter = rows[0];
+
+  const oldDobIso = oldVoter.dob_iso
+    ? new Date(oldVoter.dob_iso).toISOString().slice(0, 10)
+    : "";
+
+  const requestedDobIso = requestRow.requested_dob_iso
+    ? new Date(requestRow.requested_dob_iso).toISOString().slice(0, 10)
+    : "";
+
+  const dobMatch = oldDobIso && requestedDobIso && oldDobIso === requestedDobIso;
+  const genderMatch =
+    normalizeGenderKh(oldVoter.gender) === normalizeGenderKh(requestRow.requested_gender);
+
+  const nameMatch = samePersonByName(
+    { name_kh: oldVoter.name_kh, name_en: oldVoter.name_en },
+    {
+      name_kh: requestRow.requested_name_kh,
+      name_en: requestRow.requested_name_en,
+    }
+  );
+
+  let faceConfidence = 0;
+  let faceMatch = false;
+  let faceError = null;
+
+  try {
+    if (!oldVoter.photo || !requestRow.new_card_photo_base64) {
+      faceError = "Missing old photo or request photo";
+    } else {
+      faceConfidence = await compareFacePlusPlus(
+        oldVoter.photo,
+        requestRow.new_card_photo_base64
+      );
+      faceMatch = faceConfidence >= DOC_CHANGE_FACE_MIN_CONF;
+    }
+  } catch (e) {
+    faceError = String(e?.message || e);
+  }
+
+  const canApprove = Boolean(dobMatch && genderMatch && nameMatch && faceMatch);
+
+  return {
+    ok: true,
+    oldVoter,
+    checks: {
+      dobMatch,
+      genderMatch,
+      nameMatch,
+      faceMatch,
+      faceConfidence,
+      faceError,
+    },
+    canApprove,
+  };
+}
+
 function sha256Hex(s) {
   return crypto.createHash("sha256").update(String(s)).digest("hex");
 }
@@ -207,6 +403,20 @@ function parseDDMMYYYY(s) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+function formatDDMMYYYY(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(d.getFullYear());
+  return `${dd}.${mm}.${yyyy}`;
+}
+
+function addYearsToDateObj(dateObj, years = 10) {
+  const d = new Date(dateObj);
+  d.setFullYear(d.getFullYear() + years);
+  return d;
+}
+
 function calcAge(dob) {
   const now = new Date();
   let age = now.getFullYear() - dob.getFullYear();
@@ -257,6 +467,56 @@ async function safeUnlink(filePath) {
 
 function extractEthersError(e) {
   return e?.info?.error?.message || e?.shortMessage || e?.reason || e?.message || "";
+}
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+async function checkEmailAvailable(connection, email, voterUuid) {
+  const cleanEmail = normalizeEmail(email);
+
+  if (!cleanEmail) {
+    return { ok: false, status: 400, message: "Missing email" };
+  }
+
+  const [emailOwner] = await connection.execute(
+    `SELECT voter_uuid, email
+     FROM voter_contacts
+     WHERE LOWER(TRIM(email)) = ?
+     LIMIT 1`,
+    [cleanEmail]
+  );
+
+  if (
+    emailOwner.length &&
+    String(emailOwner[0].voter_uuid) !== String(voterUuid)
+  ) {
+    return {
+      ok: false,
+      status: 409,
+      message: "អ៊ីមែលនេះត្រូវបានប្រើរួចហើយដោយអ្នកបោះឆ្នោតផ្សេងទៀត",
+    };
+  }
+
+  const [pendingRows] = await connection.execute(
+    `SELECT request_no
+     FROM document_change_requests
+     WHERE LOWER(TRIM(requested_email)) = ?
+       AND voter_uuid <> ?
+       AND status = 'PENDING'
+     LIMIT 1`,
+    [cleanEmail, voterUuid]
+  );
+
+  if (pendingRows.length) {
+    return {
+      ok: false,
+      status: 409,
+      message: `អ៊ីមែលនេះកំពុងមានសំណើររង់ចាំរួចហើយ (${pendingRows[0].request_no})`,
+    };
+  }
+
+  return { ok: true, email: cleanEmail };
 }
 
 // =========================
@@ -607,7 +867,7 @@ app.get("/api/voters", async (_req, res) => {
               v.pob, v.address, v.issued_date, v.expiry_date, v.height,
               v.photo, v.qrcode, v.qr_token,
               v.mrz_line1, v.mrz_line2, v.mrz_line3,
-              c.phone, c.email, c.id_photo
+              c.phone, c.email, v.photo
        FROM voters v
        LEFT JOIN voter_contacts c ON c.voter_uuid = v.uuid`
     );
@@ -1468,6 +1728,800 @@ app.get("/api/voting-status", async (_req, res) => {
     });
   } catch (e) {
     return res.status(500).json({ message: "Fetch voting status failed", error: e.message });
+  }
+});
+
+app.post("/api/official-voter-search", async (req, res) => {
+  let connection;
+  try {
+    const {
+      province = "",
+      district = "",
+      lastName = "",
+      firstName = "",
+    } = req.body || {};
+
+    const provinceVal = String(province).trim();
+    const districtVal = String(district).trim();
+    const lastNameVal = String(lastName).trim();
+    const firstNameVal = String(firstName).trim();
+
+    if (!lastNameVal && !firstNameVal) {
+      return res.status(400).json({
+        message: "សូមបញ្ចូល នាមត្រកូល ឬ នាមខ្លួន យ៉ាងហោចណាស់មួយ។",
+      });
+    }
+
+    let sql = `
+      SELECT
+        uuid,
+        id_number,
+        name_kh,
+        name_en,
+        gender,
+        dob_display,
+        dob_iso,
+        pob,
+        address,
+        expiry_date,
+        is_valid_voter
+      FROM voters
+      WHERE 1 = 1
+    `;
+
+    const params = [];
+
+    if (lastNameVal) {
+      sql += ` AND (name_kh LIKE ? OR name_en LIKE ?) `;
+      params.push(`%${lastNameVal}%`, `%${lastNameVal}%`);
+    }
+
+    if (firstNameVal) {
+      sql += ` AND (name_kh LIKE ? OR name_en LIKE ?) `;
+      params.push(`%${firstNameVal}%`, `%${firstNameVal}%`);
+    }
+
+    if (provinceVal) {
+      sql += ` AND (address LIKE ? OR pob LIKE ?) `;
+      params.push(`%${provinceVal}%`, `%${provinceVal}%`);
+    }
+
+    if (districtVal) {
+      sql += ` AND (address LIKE ? OR pob LIKE ?) `;
+      params.push(`%${districtVal}%`, `%${districtVal}%`);
+    }
+
+    sql += ` ORDER BY name_kh ASC LIMIT 100 `;
+
+    connection = await mysql.createConnection(DB_CONFIG);
+    const [rows] = await connection.execute(sql, params);
+
+    return res.json({ items: rows });
+  } catch (err) {
+    console.error("official-voter-search error:", err);
+    return res.status(500).json({
+      message: "Server error while searching voter list.",
+      error: err.message,
+    });
+  } finally {
+    try {
+      if (connection) await connection.end();
+    } catch {}
+  }
+});
+app.post("/api/document-change-request/check-new-id", async (req, res) => {
+  let connection;
+  try {
+    const voterUuid = String(req.body?.voter_uuid || "").trim();
+    const oldId = canonicalId(req.body?.old_id_number || "");
+    const newId = canonicalId(req.body?.new_id_number || "");
+
+    if (!voterUuid || !oldId || !newId) {
+      return res.status(400).json({ ok: false, message: "Missing required fields" });
+    }
+
+    if (oldId === newId) {
+      return res.status(400).json({
+        ok: false,
+        message: "លេខអត្តសញ្ញាណថ្មី មិនអាចដូចលេខចាស់បានទេ",
+      });
+    }
+
+    connection = await mysql.createConnection(DB_CONFIG);
+
+        const [voterRows] = await connection.execute(
+      `SELECT uuid, id_number, name_kh, name_en, gender, dob_iso, expiry_date, photo
+       FROM voters
+       WHERE uuid = ? AND id_number = ?
+       LIMIT 1`,
+      [voterUuid, oldId]
+    );
+
+    if (!voterRows.length) {
+      return res.status(404).json({ message: "Original voter not found" });
+    }
+
+    const [usedRows] = await connection.execute(
+      `SELECT uuid FROM voters WHERE id_number = ? LIMIT 1`,
+      [newId]
+    );
+    if (usedRows.length) {
+      return res.status(409).json({
+        ok: false,
+        message: "លេខអត្តសញ្ញាណប័ណ្ណថ្មីនេះត្រូវបានប្រើរួចហើយ",
+      });
+    }
+
+    const [pendingSameNewId] = await connection.execute(
+      `SELECT request_no
+       FROM document_change_requests
+       WHERE new_id_number = ? AND status = 'PENDING'
+       LIMIT 1`,
+      [newId]
+    );
+
+    if (pendingSameNewId.length) {
+      return res.status(409).json({
+        ok: false,
+        message: "លេខអត្តសញ្ញាណប័ណ្ណថ្មីនេះកំពុងមានសំណើររង់ចាំរួចហើយ",
+      });
+    }
+
+    const [pendingByVoter] = await connection.execute(
+      `SELECT request_no
+       FROM document_change_requests
+       WHERE voter_uuid = ? AND status = 'PENDING'
+       LIMIT 1`,
+      [voterUuid]
+    );
+
+    if (pendingByVoter.length) {
+      return res.status(409).json({
+        ok: false,
+        message: `អ្នកមានសំណើកំពុងរង់ចាំរួចហើយ (${pendingByVoter[0].request_no})`,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      message: "លេខអត្តសញ្ញាណប័ណ្ណថ្មីនេះអាចប្រើបាន",
+    });
+  } catch (err) {
+    console.error("check-new-id error:", err);
+    return res.status(500).json({
+      ok: false,
+      message: "Check new ID failed",
+      error: err.message,
+    });
+  } finally {
+    try {
+      if (connection) await connection.end();
+    } catch {}
+  }
+});
+app.post("/api/document-change-request", async (req, res) => {
+  let connection;
+  let savedPhotoPath = null;
+  try {
+    const voterUuid = String(req.body?.voter_uuid || "").trim();
+    const oldId = canonicalId(req.body?.id_number || "");
+    const newId = canonicalId(req.body?.new_document_no || "");
+
+    const requestedNameKh = String(req.body?.name_kh || "").trim();
+    const requestedNameEn = String(req.body?.name_en || "").trim();
+    const requestedGender = normalizeGenderKh(req.body?.gender || "");
+    const requestedPhone = String(req.body?.phone || "").trim();
+    const requestedEmail = normalizeEmail(req.body?.email || "");
+    const requestedNote = String(req.body?.note || "").trim();
+
+    const newCardPhotoBase64 = String(req.body?.new_card_photo_base64 || "").trim();
+
+    const dobObj = buildDobFromParts(
+      req.body?.dob_day,
+      req.body?.dob_month,
+      req.body?.dob_year
+    );
+
+    if (
+      !voterUuid ||
+      !oldId ||
+      !newId ||
+      !requestedNameKh ||
+      !requestedGender ||
+      !requestedEmail ||
+      !dobObj ||
+      !newCardPhotoBase64
+    ) {
+      return res.status(400).json({ message: "Missing required fields" });
+    }
+
+    if (oldId === newId) {
+      return res.status(400).json({
+        message: "លេខអត្តសញ្ញាណថ្មី មិនអាចដូចលេខចាស់បានទេ",
+      });
+    }
+
+    connection = await mysql.createConnection(DB_CONFIG);
+
+        const [voterRows] = await connection.execute(
+      `SELECT uuid, id_number, name_kh, name_en, gender, dob_iso, expiry_date, photo
+       FROM voters
+       WHERE uuid = ? AND id_number = ?
+       LIMIT 1`,
+      [voterUuid, oldId]
+    );
+
+    if (!voterRows.length) {
+      return res.status(404).json({ message: "Original voter not found" });
+    }
+
+    const emailCheck = await checkEmailAvailable(
+      connection,
+      requestedEmail,
+      voterUuid
+    );
+
+    if (!emailCheck.ok) {
+      return res.status(emailCheck.status || 409).json({
+        message: emailCheck.message,
+      });
+    }
+
+    if (!voterRows.length) {
+      return res.status(404).json({ message: "Original voter not found" });
+    }
+
+    const [usedRows] = await connection.execute(
+      `SELECT uuid FROM voters WHERE id_number = ? LIMIT 1`,
+      [newId]
+    );
+
+    if (usedRows.length) {
+      return res.status(409).json({
+        message: "លេខអត្តសញ្ញាណប័ណ្ណថ្មីនេះត្រូវបានប្រើរួចហើយ",
+      });
+    }
+
+    const [pendingSameNewId] = await connection.execute(
+      `SELECT request_no
+       FROM document_change_requests
+       WHERE new_id_number = ? AND status = 'PENDING'
+       LIMIT 1`,
+      [newId]
+    );
+
+    if (pendingSameNewId.length) {
+      return res.status(409).json({
+        message: "លេខអត្តសញ្ញាណប័ណ្ណថ្មីនេះកំពុងមានសំណើររង់ចាំរួចហើយ",
+      });
+    }
+
+    const [pendingByVoter] = await connection.execute(
+      `SELECT request_no
+       FROM document_change_requests
+       WHERE voter_uuid = ? AND status = 'PENDING'
+       LIMIT 1`,
+      [voterUuid]
+    );
+
+    if (pendingByVoter.length) {
+      return res.status(409).json({
+        message: `អ្នកមានសំណើកំពុងរង់ចាំរួចហើយ (${pendingByVoter[0].request_no})`,
+      });
+    }
+
+    savedPhotoPath = await saveBase64ImageToUploads(newCardPhotoBase64, "doc-change");
+
+    let requestNo = makeRequestNo();
+    for (let i = 0; i < 5; i++) {
+      const [exists] = await connection.execute(
+        `SELECT id FROM document_change_requests WHERE request_no = ? LIMIT 1`,
+        [requestNo]
+      );
+      if (!exists.length) break;
+      requestNo = makeRequestNo();
+    }
+
+    await connection.execute(
+  `INSERT INTO document_change_requests (
+    request_no,
+    voter_uuid,
+    old_id_number,
+    new_id_number,
+    requested_name_kh,
+    requested_name_en,
+    requested_gender,
+    requested_dob_iso,
+    requested_dob_display,
+    requested_phone,
+    requested_email,
+    requested_note,
+    new_card_photo_path,
+    new_card_photo_base64,
+    status,
+    created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NOW())`,
+  [
+    requestNo,
+    voterUuid,
+    oldId,
+    newId,
+    requestedNameKh,
+    requestedNameEn || null,
+    requestedGender,
+    dobObj.dob_iso,
+    dobObj.dob_display,
+    requestedPhone || null,
+    requestedEmail,
+    requestedNote || null,
+    savedPhotoPath,
+    newCardPhotoBase64,
+  ]
+);
+
+    const trackUrl =
+      `${process.env.FRONTEND_URL || "http://localhost:5173"}` +
+      `/track-document-request/${encodeURIComponent(requestNo)}`;
+
+    await sendEmail(
+      requestedEmail,
+      "KampuVote Document Change Request Tracking Number",
+      `Your document change request has been submitted.\n\n` +
+        `Tracking Number: ${requestNo}\n` +
+        `Old ID Number: ${oldId}\n` +
+        `New ID Number: ${newId}\n` +
+        `Status: PENDING\n\n` +
+        `Track your request here:\n${trackUrl}\n`
+    );
+
+    return res.json({
+      message: "បានផ្ញើសំណើរួចរាល់",
+      request_no: requestNo,
+      status: "PENDING",
+      track_url: trackUrl,
+    });
+  } catch (err) {
+    console.error("document-change-request submit error:", err);
+
+    if (savedPhotoPath) {
+      await safeUnlinkPublicPath(savedPhotoPath);
+    }
+
+    return res.status(500).json({
+      message: "Submit request failed",
+      error: err.message,
+    });
+  } finally {
+    try {
+      if (connection) await connection.end();
+    } catch {}
+  }
+});
+app.get("/api/document-change-request/track/:requestNo", async (req, res) => {
+  let connection;
+  try {
+    const requestNo = String(req.params.requestNo || "").trim();
+    if (!requestNo) {
+      return res.status(400).json({ message: "Missing request number" });
+    }
+
+    connection = await mysql.createConnection(DB_CONFIG);
+
+    const [rows] = await connection.execute(
+      `SELECT request_no, old_id_number, new_id_number, requested_email,
+              status, admin_note, created_at, reviewed_at
+       FROM document_change_requests
+       WHERE request_no = ?
+       LIMIT 1`,
+      [requestNo]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ message: "Request not found" });
+    }
+
+    return res.json(rows[0]);
+  } catch (err) {
+    console.error("track request error:", err);
+    return res.status(500).json({
+      message: "Track request failed",
+      error: err.message,
+    });
+  } finally {
+    try {
+      if (connection) await connection.end();
+    } catch {}
+  }
+});
+app.get("/api/admin/document-change-requests", adminRequired, async (req, res) => {
+  let connection;
+  try {
+    const status = String(req.query.status || "").trim().toUpperCase();
+
+    connection = await mysql.createConnection(DB_CONFIG);
+
+    let sql = `
+      SELECT
+        d.request_no,
+        d.voter_uuid,
+        d.old_id_number,
+        d.new_id_number,
+        d.requested_name_kh,
+        d.requested_gender,
+        d.requested_dob_display,
+        d.requested_phone,
+        d.requested_email,
+        d.new_card_photo_path,
+        d.status,
+        d.created_at,
+        d.reviewed_at,
+        d.admin_note,
+        v.name_kh AS old_name_kh,
+        v.name_en AS old_name_en,
+        v.gender AS old_gender,
+        v.dob_display AS old_dob_display,
+        v.photo AS old_photo
+      FROM document_change_requests d
+      JOIN voters v ON v.uuid = d.voter_uuid
+    `;
+
+    const params = [];
+
+    if (["PENDING", "APPROVED", "REJECTED"].includes(status)) {
+      sql += ` WHERE d.status = ? `;
+      params.push(status);
+    }
+
+    sql += ` ORDER BY d.created_at DESC `;
+
+    const [rows] = await connection.execute(sql, params);
+    return res.json({ items: rows });
+  } catch (err) {
+    console.error("admin document-change-requests list error:", err);
+    return res.status(500).json({
+      message: "Load requests failed",
+      error: err.message,
+    });
+  } finally {
+    try {
+      if (connection) await connection.end();
+    } catch {}
+  }
+});
+app.get("/api/admin/document-change-requests/:requestNo", adminRequired, async (req, res) => {
+  let connection;
+  try {
+    const requestNo = String(req.params.requestNo || "").trim();
+    if (!requestNo) {
+      return res.status(400).json({ message: "Missing request number" });
+    }
+
+    connection = await mysql.createConnection(DB_CONFIG);
+
+    const [rows] = await connection.execute(
+      `SELECT *
+       FROM document_change_requests
+       WHERE request_no = ?
+       LIMIT 1`,
+      [requestNo]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ message: "Request not found" });
+    }
+
+    const requestRow = rows[0];
+    const verification = await verifyDocumentChangeForApproval(connection, requestRow);
+
+    return res.json({
+      request: requestRow,
+      verification,
+    });
+  } catch (err) {
+    console.error("admin request detail error:", err);
+    return res.status(500).json({
+      message: "Load request detail failed",
+      error: err.message,
+    });
+  } finally {
+    try {
+      if (connection) await connection.end();
+    } catch {}
+  }
+});
+app.patch("/api/admin/document-change-requests/:requestNo", adminRequired, async (req, res) => {
+  let connection;
+  try {
+    const requestNo = String(req.params.requestNo || "").trim();
+    const action = String(req.body?.action || "").trim().toUpperCase();
+    const adminNote = String(req.body?.admin_note || "").trim();
+
+    if (!["APPROVE", "REJECT"].includes(action)) {
+      return res.status(400).json({ message: "Invalid action" });
+    }
+
+    connection = await mysql.createConnection(DB_CONFIG);
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      `SELECT *
+       FROM document_change_requests
+       WHERE request_no = ?
+       LIMIT 1
+       FOR UPDATE`,
+      [requestNo]
+    );
+
+    if (!rows.length) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Request not found" });
+    }
+
+    const requestRow = rows[0];
+
+    if (requestRow.status !== "PENDING") {
+      await connection.rollback();
+      return res.status(409).json({ message: "Request already processed" });
+    }
+
+    if (action === "REJECT") {
+      await connection.execute(
+        `UPDATE document_change_requests
+         SET status = 'REJECTED',
+             admin_note = ?,
+             reviewed_at = NOW(),
+             reviewed_by_admin_id = ?
+         WHERE request_no = ?`,
+        [adminNote || null, req.admin?.admin_id || null, requestNo]
+      );
+
+      await connection.commit();
+
+      if (requestRow.requested_email) {
+        await sendEmail(
+          requestRow.requested_email,
+          "KampuVote Document Change Request Rejected",
+          `Tracking Number: ${requestNo}\n` +
+            `Status: REJECTED\n` +
+            `Admin Note: ${adminNote || "-"}\n`
+        );
+      }
+
+      return res.json({
+        message: "Request rejected",
+        request_no: requestNo,
+        status: "REJECTED",
+      });
+    }
+
+    const [usedRows] = await connection.execute(
+      `SELECT uuid FROM voters
+       WHERE id_number = ? AND uuid <> ?
+       LIMIT 1`,
+      [requestRow.new_id_number, requestRow.voter_uuid]
+    );
+
+    if (usedRows.length) {
+      await connection.rollback();
+      return res.status(409).json({
+        message: "New ID number is already used by another voter",
+      });
+    }
+
+    const verification = await verifyDocumentChangeForApproval(connection, requestRow);
+    if (!verification.ok) {
+      await connection.rollback();
+      return res.status(verification.status || 400).json({
+        message: verification.message || "Verification failed",
+      });
+    }
+
+    const { dobMatch, genderMatch, nameMatch, faceMatch, faceConfidence, faceError } =
+      verification.checks;
+
+    await connection.execute(
+      `UPDATE document_change_requests
+       SET dob_match = ?,
+           gender_match = ?,
+           name_match = ?,
+           face_match = ?,
+           face_confidence = ?,
+           admin_note = ?,
+           reviewed_at = NOW(),
+           reviewed_by_admin_id = ?
+       WHERE request_no = ?`,
+      [
+        dobMatch ? 1 : 0,
+        genderMatch ? 1 : 0,
+        nameMatch ? 1 : 0,
+        faceMatch ? 1 : 0,
+        Number(faceConfidence || 0),
+        adminNote || null,
+        req.admin?.admin_id || null,
+        requestNo,
+      ]
+    );
+
+    if (!verification.canApprove) {
+      await connection.rollback();
+      return res.status(409).json({
+        message: "Auto verification failed. Request cannot be approved.",
+        checks: {
+          dob_match: dobMatch,
+          gender_match: genderMatch,
+          name_match: nameMatch,
+          face_match: faceMatch,
+          face_confidence: faceConfidence,
+          face_error: faceError,
+        },
+      });
+    }
+
+   const oldExpiry = parseDDMMYYYY(verification.oldVoter?.expiry_date);
+const today = new Date();
+
+const baseDate =
+  oldExpiry && oldExpiry.getTime() > today.getTime()
+    ? oldExpiry
+    : today;
+
+const newIssuedDate = formatDDMMYYYY(today);
+const autoExpiryDate = formatDDMMYYYY(addYearsToDateObj(baseDate, 10));
+
+    await connection.execute(
+  `UPDATE voters
+      SET id_number = ?,
+          photo = ?,
+          issued_date = ?,
+          expiry_date = ?
+      WHERE uuid = ?`,
+  [
+    requestRow.new_id_number,
+    requestRow.new_card_photo_base64 || verification.oldVoter.photo,
+    newIssuedDate,
+    autoExpiryDate,
+    requestRow.voter_uuid,
+  ]
+);
+    const requestedEmail = String(requestRow.requested_email || "").trim().toLowerCase();
+
+if (requestedEmail) {
+  const [emailOwner] = await connection.execute(
+    `SELECT voter_uuid
+     FROM voter_contacts
+     WHERE email = ?
+     LIMIT 1`,
+    [requestedEmail]
+  );
+
+  if (
+    emailOwner.length &&
+    String(emailOwner[0].voter_uuid) !== String(requestRow.voter_uuid)
+  ) {
+    await connection.rollback();
+    return res.status(409).json({
+      message: "អ៊ីមែលនេះត្រូវបានប្រើរួចហើយដោយអ្នកបោះឆ្នោតផ្សេងទៀត",
+    });
+  }
+}
+
+    await connection.execute(
+  `INSERT INTO voter_contacts (voter_uuid, phone, email)
+   VALUES (?, ?, ?)
+   ON DUPLICATE KEY UPDATE
+     phone = VALUES(phone),
+     email = VALUES(email),
+     updated_at = CURRENT_TIMESTAMP`,
+  [
+    requestRow.voter_uuid,
+    requestRow.requested_phone || "",
+    requestedEmail,
+  ]
+);
+    await connection.execute(
+      `UPDATE document_change_requests
+       SET status = 'APPROVED',
+           admin_note = ?,
+           reviewed_at = NOW(),
+           reviewed_by_admin_id = ?,
+           dob_match = ?,
+           gender_match = ?,
+           name_match = ?,
+           face_match = ?,
+           face_confidence = ?
+       WHERE request_no = ?`,
+      [
+        adminNote || null,
+        req.admin?.admin_id || null,
+        dobMatch ? 1 : 0,
+        genderMatch ? 1 : 0,
+        nameMatch ? 1 : 0,
+        faceMatch ? 1 : 0,
+        Number(faceConfidence || 0),
+        requestNo,
+      ]
+    );
+
+    await connection.commit();
+
+    if (requestRow.requested_email) {
+      await sendEmail(
+        requestRow.requested_email,
+        "KampuVote Document Change Request Approved",
+        `Tracking Number: ${requestNo}\n` +
+          `Status: APPROVED\n` +
+          `New ID Number: ${requestRow.new_id_number}\n` +
+          `Face Confidence: ${Number(faceConfidence || 0).toFixed(2)}\n`
+      );
+    }
+
+    return res.json({
+      message: "Request approved and voter updated",
+      request_no: requestNo,
+      status: "APPROVED",
+      checks: {
+        dob_match: dobMatch,
+        gender_match: genderMatch,
+        name_match: nameMatch,
+        face_match: faceMatch,
+        face_confidence: faceConfidence,
+      },
+    });
+  } catch (err) {
+    try {
+      if (connection) await connection.rollback();
+    } catch {}
+
+    console.error("admin approve/reject error:", err);
+    return res.status(500).json({
+      message: "Update request failed",
+      error: err.message,
+    });
+  } finally {
+    try {
+      if (connection) await connection.end();
+    } catch {}
+  }
+});
+app.post("/api/document-change-request/check-email", async (req, res) => {
+  let connection;
+  try {
+    const voterUuid = String(req.body?.voter_uuid || "").trim();
+    const email = normalizeEmail(req.body?.email || "");
+
+    if (!voterUuid || !email) {
+      return res.status(400).json({
+        ok: false,
+        message: "Missing voter_uuid or email",
+      });
+    }
+
+    connection = await mysql.createConnection(DB_CONFIG);
+
+    const result = await checkEmailAvailable(connection, email, voterUuid);
+
+    if (!result.ok) {
+      return res.status(result.status || 409).json({
+        ok: false,
+        message: result.message,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      message: "អ៊ីមែលនេះអាចប្រើបាន",
+    });
+  } catch (err) {
+    console.error("check-email error:", err);
+    return res.status(500).json({
+      ok: false,
+      message: "Check email failed",
+      error: err.message,
+    });
+  } finally {
+    try {
+      if (connection) await connection.end();
+    } catch {}
   }
 });
 

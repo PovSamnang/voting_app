@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
+import AdminShell from "../../components/AdminShell";
 
 /**
  *  Admin UI + Election History Report (NO FLOW CHANGE)
@@ -51,8 +53,8 @@ function computePhaseFrom(nowTs, configured, startTs, endTs) {
 }
 
 function rowClass(v) {
-  if (v?.expired) return "table-danger"; // red
-  if (v?.under18) return "table-warning"; // orange/yellow
+  if (v?.expired) return "table-danger";
+  if (v?.under18) return "table-warning";
   return "";
 }
 
@@ -69,7 +71,6 @@ function CandidateCell({ c }) {
           alt="candidate"
           style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 10 }}
           onError={(e) => {
-            // If not a direct image link / blocked by CORS -> hide it
             e.currentTarget.style.display = "none";
           }}
         />
@@ -99,19 +100,21 @@ function CandidateCell({ c }) {
 }
 
 export default function ElectionAdmin() {
+  const navigate = useNavigate();
+
   const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
   const ADMIN_KEY = import.meta.env.VITE_ADMIN_KEY || "";
 
   const api = useMemo(() => {
-  const token = localStorage.getItem("admin_token") || "";
-  return axios.create({
-    baseURL: API_URL,
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(ADMIN_KEY ? { "x-admin-key": ADMIN_KEY } : {}),
-    },
-  });
-}, [API_URL, ADMIN_KEY]);
+    const token = localStorage.getItem("admin_token") || "";
+    return axios.create({
+      baseURL: API_URL,
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(ADMIN_KEY ? { "x-admin-key": ADMIN_KEY } : {}),
+      },
+    });
+  }, [API_URL, ADMIN_KEY]);
 
   const [candForm, setCandForm] = useState({
     name_en: "",
@@ -148,6 +151,11 @@ export default function ElectionAdmin() {
   const canSetPeriod = status.phase === "DRAFT" && status.election_id > 0;
   const canAddCandidates =
     status.election_id > 0 && (status.phase === "DRAFT" || status.phase === "BEFORE_START");
+
+  const logout = () => {
+    localStorage.removeItem("admin_token");
+    navigate("/admin/login", { replace: true });
+  };
 
   const loadVotingStatus = async () => {
     const res = await axios.get(`${API_URL}/voting-status`);
@@ -374,483 +382,422 @@ export default function ElectionAdmin() {
   const votedList = reportView?.votersRegisteredVoted || reportView?.votersVoted || [];
 
   return (
-    <div className="container py-4" style={{ maxWidth: 1100 }}>
-      <div className="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
-        <div>
-          <h3 className="mb-1">🛠️ KampuVote Admin Console</h3>
-          <div className="text-muted">
-            Flow: <b>1) Create Draft</b> → <b>2) Add Candidates</b> → <b>3) Set Period</b> →{" "}
-            <b>4) Monitor Report</b> → <b>5) After End, create next Draft</b>.
+    <AdminShell active="elections" onLogout={logout} adminName="Admin">
+      <div className="container py-4" style={{ maxWidth: 1100 }}>
+        <div className="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
+          <div>
+            <h3 className="mb-1">🛠️ KampuVote Admin Console</h3>
+            <div className="text-muted">
+              Flow: <b>1) Create Draft</b> → <b>2) Add Candidates</b> → <b>3) Set Period</b> →{" "}
+              <b>4) Monitor Report</b> → <b>5) After End, create next Draft</b>.
+            </div>
+          </div>
+
+          <div className="text-end">
+            <div className="d-flex align-items-center justify-content-end gap-2">
+              <span className="text-muted small">Current Election</span>
+              <span className="badge bg-dark">#{status.election_id || "—"}</span>
+              <span className={`badge ${phaseBadge.cls}`}>{phaseBadge.text}</span>
+            </div>
+            <div className="small text-muted mt-1">Auto refresh: every 3s</div>
           </div>
         </div>
 
-        <div className="text-end">
-          <div className="d-flex align-items-center justify-content-end gap-2">
-            <span className="text-muted small">Current Election</span>
-            <span className="badge bg-dark">#{status.election_id || "—"}</span>
-            <span className={`badge ${phaseBadge.cls}`}>{phaseBadge.text}</span>
-          </div>
-          <div className="small text-muted mt-1">Auto refresh: every 3s</div>
-        </div>
-      </div>
+        {msg && <div className={`alert alert-${msg.type} shadow-sm`}>{msg.text}</div>}
 
-      {msg && <div className={`alert alert-${msg.type} shadow-sm`}>{msg.text}</div>}
-
-      {/* Top summary */}
-      <div className="row g-3 mb-3">
-        <div className="col-md-4">
-          <div className="card shadow-sm">
-            <div className="card-body">
-              <div className="text-muted small">Voting period (CURRENT)</div>
-              <div className="fw-semibold">
-                {fmtTs(status.start_ts)} → {fmtTs(status.end_ts)}
-              </div>
-
-              {status.configured ? (
-                <div className="progress mt-3" style={{ height: 10 }}>
-                  <div
-                    className={`progress-bar ${status.active_chain ? "bg-success" : "bg-secondary"}`}
-                    role="progressbar"
-                    style={{ width: `${progress}%` }}
-                  />
+        <div className="row g-3 mb-3">
+          <div className="col-md-4">
+            <div className="card shadow-sm">
+              <div className="card-body">
+                <div className="text-muted small">Voting period (CURRENT)</div>
+                <div className="fw-semibold">
+                  {fmtTs(status.start_ts)} → {fmtTs(status.end_ts)}
                 </div>
-              ) : (
-                <div className="mt-2 small text-muted">Draft: period not set yet.</div>
-              )}
 
-              <div className="mt-2 small text-muted">
-                Chain now: <b>{fmtTs(status.chain_now_ts)}</b>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="col-md-4">
-          <div className="card shadow-sm">
-            <div className="card-body">
-              <div className="text-muted small">Registrations (CURRENT)</div>
-              <div className="display-6 mb-0">{currentReport?.registered ?? "—"}</div>
-              <div className="text-muted small mt-2">
-                Voted: <b>{currentReport?.voted ?? "—"}</b> • Not voted:{" "}
-                <b>{currentReport?.registered_not_voted ?? "—"}</b>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="col-md-4">
-          <div className="card shadow-sm">
-            <div className="card-body">
-              <div className="text-muted small">Winner / Leader (CURRENT)</div>
-              {currentWinner ? (
-                <>
-                  {/* show winner image too */}
-                  <CandidateCell c={currentWinner} />
-                  <div className="mt-2">
-                    <span className="badge bg-success">
-                      Votes: {Number(currentWinner.voteCount || 0)}
-                    </span>
-                    <span className="badge bg-dark ms-2">Total votes: {currentTotalVotes}</span>
+                {status.configured ? (
+                  <div className="progress mt-3" style={{ height: 10 }}>
+                    <div
+                      className={`progress-bar ${status.active_chain ? "bg-success" : "bg-secondary"}`}
+                      role="progressbar"
+                      style={{ width: `${progress}%` }}
+                    />
                   </div>
-                </>
-              ) : (
-                <div className="text-muted">No candidates yet.</div>
-              )}
+                ) : (
+                  <div className="mt-2 small text-muted">Draft: period not set yet.</div>
+                )}
+
+                <div className="mt-2 small text-muted">
+                  Chain now: <b>{fmtTs(status.chain_now_ts)}</b>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="col-md-4">
+            <div className="card shadow-sm">
+              <div className="card-body">
+                <div className="text-muted small">Registrations (CURRENT)</div>
+                <div className="display-6 mb-0">{currentReport?.registered ?? "—"}</div>
+                <div className="text-muted small mt-2">
+                  Voted: <b>{currentReport?.voted ?? "—"}</b> • Not voted:{" "}
+                  <b>{currentReport?.registered_not_voted ?? "—"}</b>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="col-md-4">
+            <div className="card shadow-sm">
+              <div className="card-body">
+                <div className="text-muted small">Winner / Leader (CURRENT)</div>
+                {currentWinner ? (
+                  <>
+                    <CandidateCell c={currentWinner} />
+                    <div className="mt-2">
+                      <span className="badge bg-success">
+                        Votes: {Number(currentWinner.voteCount || 0)}
+                      </span>
+                      <span className="badge bg-dark ms-2">Total votes: {currentTotalVotes}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-muted">No candidates yet.</div>
+                )}
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Tabs */}
-      <ul className="nav nav-pills mb-3">
-        <li className="nav-item">
-          <button className={`nav-link ${tab === "setup" ? "active" : ""}`} onClick={() => setTab("setup")}>
-            1) Draft & Period
-          </button>
-        </li>
-        <li className="nav-item">
-          <button className={`nav-link ${tab === "candidates" ? "active" : ""}`} onClick={() => setTab("candidates")}>
-            2) Candidates
-          </button>
-        </li>
-        <li className="nav-item">
-          <button className={`nav-link ${tab === "report" ? "active" : ""}`} onClick={() => setTab("report")}>
-            3) Report & Results (History)
-          </button>
-        </li>
-      </ul>
+        <ul className="nav nav-pills mb-3">
+          <li className="nav-item">
+            <button className={`nav-link ${tab === "setup" ? "active" : ""}`} onClick={() => setTab("setup")}>
+              1) Draft & Period
+            </button>
+          </li>
+          <li className="nav-item">
+            <button className={`nav-link ${tab === "candidates" ? "active" : ""}`} onClick={() => setTab("candidates")}>
+              2) Candidates
+            </button>
+          </li>
+          <li className="nav-item">
+            <button className={`nav-link ${tab === "report" ? "active" : ""}`} onClick={() => setTab("report")}>
+              3) Report & Results (History)
+            </button>
+          </li>
+        </ul>
 
-      {/* Setup */}
-      {tab === "setup" && (
-        <div className="card shadow-sm mb-4">
-          <div className="card-body p-4">
-            <div className="p-3 border rounded mb-3">
-              <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
-                <div>
-                  <div className="fw-semibold">Step A — Create Draft Election</div>
-                  <div className="text-muted small">
-                    Allowed only if there is no election or the previous election ended.
+        {tab === "setup" && (
+          <div className="card shadow-sm mb-4">
+            <div className="card-body p-4">
+              <div className="p-3 border rounded mb-3">
+                <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                  <div>
+                    <div className="fw-semibold">Step A — Create Draft Election</div>
+                    <div className="text-muted small">
+                      Allowed only if there is no election or the previous election ended.
+                    </div>
                   </div>
-                </div>
-                <button className="btn btn-primary" disabled={busy || !canCreateDraft} onClick={createDraftElection}>
-                  {busy ? "Working..." : "Create Draft"}
-                </button>
-              </div>
-            </div>
-
-            <div className="p-3 border rounded">
-              <div className="fw-semibold">Step B — Set Voting Period (Start/End)</div>
-
-              {!canSetPeriod && (
-                <div className="alert alert-info mt-3">
-                  You can set period only when election is in <b>DRAFT</b> phase.
-                </div>
-              )}
-
-              <form onSubmit={setElectionPeriod} className="row g-3">
-                <div className="col-md-6">
-                  <label className="form-label fw-semibold">Start (local time)</label>
-                  <input
-                    className="form-control"
-                    type="datetime-local"
-                    value={period.startLocal}
-                    onChange={(e) => setPeriod((p) => ({ ...p, startLocal: e.target.value }))}
-                    required
-                    disabled={!canSetPeriod || busy}
-                  />
-                </div>
-
-                <div className="col-md-6">
-                  <label className="form-label fw-semibold">End (local time)</label>
-                  <input
-                    className="form-control"
-                    type="datetime-local"
-                    value={period.endLocal}
-                    onChange={(e) => setPeriod((p) => ({ ...p, endLocal: e.target.value }))}
-                    required
-                    disabled={!canSetPeriod || busy}
-                  />
-                </div>
-
-                <div className="col-12 d-flex flex-wrap gap-2">
-                  <button className="btn btn-success" disabled={busy || !canSetPeriod}>
-                    {busy ? "Saving..." : "Set Period"}
+                  <button className="btn btn-primary" disabled={busy || !canCreateDraft} onClick={createDraftElection}>
+                    {busy ? "Working..." : "Create Draft"}
                   </button>
+                </div>
+              </div>
+
+              <div className="p-3 border rounded">
+                <div className="fw-semibold">Step B — Set Voting Period (Start/End)</div>
+
+                {!canSetPeriod && (
+                  <div className="alert alert-info mt-3">
+                    You can set period only when election is in <b>DRAFT</b> phase.
+                  </div>
+                )}
+
+                <form onSubmit={setElectionPeriod} className="row g-3">
+                  <div className="col-md-6">
+                    <label className="form-label fw-semibold">Start (local time)</label>
+                    <input
+                      className="form-control"
+                      type="datetime-local"
+                      value={period.startLocal}
+                      onChange={(e) => setPeriod((p) => ({ ...p, startLocal: e.target.value }))}
+                      required
+                      disabled={!canSetPeriod || busy}
+                    />
+                  </div>
+
+                  <div className="col-md-6">
+                    <label className="form-label fw-semibold">End (local time)</label>
+                    <input
+                      className="form-control"
+                      type="datetime-local"
+                      value={period.endLocal}
+                      onChange={(e) => setPeriod((p) => ({ ...p, endLocal: e.target.value }))}
+                      required
+                      disabled={!canSetPeriod || busy}
+                    />
+                  </div>
+
+                  <div className="col-12 d-flex flex-wrap gap-2">
+                    <button className="btn btn-success" disabled={busy || !canSetPeriod}>
+                      {busy ? "Saving..." : "Set Period"}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-outline-secondary"
+                      disabled={busy}
+                      onClick={() => {
+                        setMsg(null);
+                        loadVotingStatus();
+                        loadCurrentReport();
+                        loadElections();
+                      }}
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "candidates" && (
+          <div className="card shadow-sm mb-4">
+            <div className="card-body p-4">
+              {!status.election_id ? (
+                <div className="alert alert-info">
+                  Create a <b>Draft election</b> first.
+                </div>
+              ) : !canAddCandidates ? (
+                <div className="alert alert-warning">
+                  Candidates are locked because election is <b>{status.phase}</b>.
+                </div>
+              ) : null}
+
+              <form onSubmit={addCandidate} className="row g-3">
+                <div className="col-md-6">
+                  <label className="form-label fw-semibold">Name EN *</label>
+                  <input
+                    className="form-control"
+                    value={candForm.name_en}
+                    onChange={(e) => setCandForm((p) => ({ ...p, name_en: e.target.value }))}
+                    required
+                    disabled={!canAddCandidates || busy}
+                  />
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label fw-semibold">Name KH</label>
+                  <input
+                    className="form-control"
+                    value={candForm.name_kh}
+                    onChange={(e) => setCandForm((p) => ({ ...p, name_kh: e.target.value }))}
+                    disabled={!canAddCandidates || busy}
+                  />
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label fw-semibold">Party</label>
+                  <input
+                    className="form-control"
+                    value={candForm.party}
+                    onChange={(e) => setCandForm((p) => ({ ...p, party: e.target.value }))}
+                    disabled={!canAddCandidates || busy}
+                  />
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label fw-semibold">Photo URL</label>
+                  <input
+                    className="form-control"
+                    value={candForm.photo_url}
+                    onChange={(e) => setCandForm((p) => ({ ...p, photo_url: e.target.value }))}
+                    disabled={!canAddCandidates || busy}
+                    placeholder="https://... (direct .jpg/.png preferred)"
+                  />
+                  <div className="form-text">
+                    Tip: Use a direct image URL (ends with .jpg/.png). Some links (Drive/Facebook) won’t render.
+                  </div>
+                </div>
+
+                <div className="col-12 d-flex gap-2">
+                  <button className="btn btn-success" disabled={!canAddCandidates || busy}>
+                    {busy ? "Adding..." : "Add Candidate"}
+                  </button>
+                </div>
+              </form>
+
+              <hr className="my-4" />
+
+              <div className="table-responsive">
+                <table className="table table-striped table-bordered align-middle">
+                  <thead className="table-dark">
+                    <tr>
+                      <th style={{ width: 70 }}>ID</th>
+                      <th>Candidate</th>
+                      <th>Party</th>
+                      <th style={{ width: 120 }}>Votes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {currentCandidates.map((c) => (
+                      <tr key={c.id}>
+                        <td className="text-center fw-bold">{c.id}</td>
+                        <td><CandidateCell c={c} /></td>
+                        <td>{c.party || "-"}</td>
+                        <td className="text-center fw-bold">{Number(c.voteCount || 0)}</td>
+                      </tr>
+                    ))}
+                    {currentCandidates.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="text-center text-muted py-4">
+                          No candidates yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "report" && (
+          <div className="card shadow-sm">
+            <div className="card-body p-4">
+              <div className="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
+                <div>
+                  <h5 className="mb-1">📊 Election Report (Current + History)</h5>
+                  <div className="text-muted small">Choose a past election to view archived data.</div>
+                </div>
+
+                <div className="d-flex flex-wrap gap-2 align-items-center">
+                  <div className="text-muted small">View:</div>
+                  <select
+                    className="form-select"
+                    style={{ width: 320 }}
+                    value={reportSel}
+                    disabled={busy}
+                    onChange={(e) => onChangeReportSel(e.target.value)}
+                  >
+                    <option value="current">Current (Live)</option>
+                    {elections.map((e) => (
+                      <option key={e.election_id} value={String(e.election_id)}>
+                        {`Election #${e.election_id} (${String(e.phase || "").toUpperCase() || "—"})`}
+                      </option>
+                    ))}
+                  </select>
 
                   <button
-                    type="button"
-                    className="btn btn-outline-secondary"
+                    className="btn btn-outline-primary"
                     disabled={busy}
                     onClick={() => {
                       setMsg(null);
-                      loadVotingStatus();
-                      loadCurrentReport();
                       loadElections();
+                      loadReportView(reportSel);
                     }}
                   >
                     Refresh
                   </button>
                 </div>
-              </form>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Candidates */}
-      {tab === "candidates" && (
-        <div className="card shadow-sm mb-4">
-          <div className="card-body p-4">
-            {!status.election_id ? (
-              <div className="alert alert-info">
-                Create a <b>Draft election</b> first.
-              </div>
-            ) : !canAddCandidates ? (
-              <div className="alert alert-warning">
-                Candidates are locked because election is <b>{status.phase}</b>.
-              </div>
-            ) : null}
-
-            <form onSubmit={addCandidate} className="row g-3">
-              <div className="col-md-6">
-                <label className="form-label fw-semibold">Name EN *</label>
-                <input
-                  className="form-control"
-                  value={candForm.name_en}
-                  onChange={(e) => setCandForm((p) => ({ ...p, name_en: e.target.value }))}
-                  required
-                  disabled={!canAddCandidates || busy}
-                />
-              </div>
-              <div className="col-md-6">
-                <label className="form-label fw-semibold">Name KH</label>
-                <input
-                  className="form-control"
-                  value={candForm.name_kh}
-                  onChange={(e) => setCandForm((p) => ({ ...p, name_kh: e.target.value }))}
-                  disabled={!canAddCandidates || busy}
-                />
-              </div>
-              <div className="col-md-6">
-                <label className="form-label fw-semibold">Party</label>
-                <input
-                  className="form-control"
-                  value={candForm.party}
-                  onChange={(e) => setCandForm((p) => ({ ...p, party: e.target.value }))}
-                  disabled={!canAddCandidates || busy}
-                />
-              </div>
-              <div className="col-md-6">
-                <label className="form-label fw-semibold">Photo URL</label>
-                <input
-                  className="form-control"
-                  value={candForm.photo_url}
-                  onChange={(e) => setCandForm((p) => ({ ...p, photo_url: e.target.value }))}
-                  disabled={!canAddCandidates || busy}
-                  placeholder="https://... (direct .jpg/.png preferred)"
-                />
-                <div className="form-text">
-                  Tip: Use a direct image URL (ends with .jpg/.png). Some links (Drive/Facebook) won’t render.
-                </div>
               </div>
 
-              <div className="col-12 d-flex gap-2">
-                <button className="btn btn-success" disabled={!canAddCandidates || busy}>
-                  {busy ? "Adding..." : "Add Candidate"}
-                </button>
-              </div>
-            </form>
-
-            <hr className="my-4" />
-
-            <div className="table-responsive">
-              <table className="table table-striped table-bordered align-middle">
-                <thead className="table-dark">
-                  <tr>
-                    <th style={{ width: 70 }}>ID</th>
-                    <th>Candidate</th>
-                    <th>Party</th>
-                    <th style={{ width: 120 }}>Votes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {currentCandidates.map((c) => (
-                    <tr key={c.id}>
-                      <td className="text-center fw-bold">{c.id}</td>
-                      {/* ✅ FIX: show image */}
-                      <td><CandidateCell c={c} /></td>
-                      <td>{c.party || "-"}</td>
-                      <td className="text-center fw-bold">{Number(c.voteCount || 0)}</td>
-                    </tr>
-                  ))}
-                  {currentCandidates.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="text-center text-muted py-4">
-                        No candidates yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Report */}
-      {tab === "report" && (
-        <div className="card shadow-sm">
-          <div className="card-body p-4">
-            <div className="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
-              <div>
-                <h5 className="mb-1">📊 Election Report (Current + History)</h5>
-                <div className="text-muted small">Choose a past election to view archived data.</div>
+              <div className="d-flex align-items-center gap-2 mb-3">
+                <span className="badge bg-dark">
+                  Viewing:{" "}
+                  {reportSel === "current"
+                    ? `Current #${status.election_id || "—"}`
+                    : `Election #${reportSel}`}
+                </span>
+                <span className={`badge ${viewPhaseBadge.cls}`}>{viewPhaseBadge.text}</span>
               </div>
 
-              <div className="d-flex flex-wrap gap-2 align-items-center">
-                <div className="text-muted small">View:</div>
-                <select
-                  className="form-select"
-                  style={{ width: 320 }}
-                  value={reportSel}
-                  disabled={busy}
-                  onChange={(e) => onChangeReportSel(e.target.value)}
-                >
-                  <option value="current">Current (Live)</option>
-                  {elections.map((e) => (
-                    <option key={e.election_id} value={String(e.election_id)}>
-                      {`Election #${e.election_id} (${String(e.phase || "").toUpperCase() || "—"})`}
-                    </option>
-                  ))}
-                </select>
-
-                <button
-                  className="btn btn-outline-primary"
-                  disabled={busy}
-                  onClick={() => {
-                    setMsg(null);
-                    loadElections();
-                    loadReportView(reportSel);
-                  }}
-                >
-                  Refresh
-                </button>
-              </div>
-            </div>
-
-            <div className="d-flex align-items-center gap-2 mb-3">
-              <span className="badge bg-dark">
-                Viewing:{" "}
-                {reportSel === "current"
-                  ? `Current #${status.election_id || "—"}`
-                  : `Election #${reportSel}`}
-              </span>
-              <span className={`badge ${viewPhaseBadge.cls}`}>{viewPhaseBadge.text}</span>
-            </div>
-
-            {!reportView ? (
-              <div className="alert alert-info">No report data.</div>
-            ) : (
-              <>
-                <div className="row g-3 mb-3">
-                  <div className="col-md-4">
-                    <div className="p-3 border rounded">
-                      <div className="text-muted small">Period</div>
-                      <div className="fw-semibold">
-                        {fmtTs(reportView.start_ts)} → {fmtTs(reportView.end_ts)}
+              {!reportView ? (
+                <div className="alert alert-info">No report data.</div>
+              ) : (
+                <>
+                  <div className="row g-3 mb-3">
+                    <div className="col-md-4">
+                      <div className="p-3 border rounded">
+                        <div className="text-muted small">Period</div>
+                        <div className="fw-semibold">
+                          {fmtTs(reportView.start_ts)} → {fmtTs(reportView.end_ts)}
+                        </div>
+                        <div className="text-muted small mt-1">
+                          Election ID: <b>{reportView.election_id ?? "—"}</b>
+                        </div>
                       </div>
-                      <div className="text-muted small mt-1">
-                        Election ID: <b>{reportView.election_id ?? "—"}</b>
+                    </div>
+
+                    <div className="col-md-4">
+                      <div className="p-3 border rounded">
+                        <div className="text-muted small">Registered</div>
+                        <div className="fs-3 fw-bold">{reportView.registered ?? "—"}</div>
+                        <div className="text-muted small mt-1">
+                          Voted: <b>{reportView.voted ?? "—"}</b> • Not voted:{" "}
+                          <b>{reportView.registered_not_voted ?? "—"}</b>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="col-md-4">
+                      <div className="p-3 border rounded">
+                        <div className="text-muted small">Leader / Winner</div>
+                        {viewWinner ? (
+                          <>
+                            <CandidateCell c={viewWinner} />
+                            <div className="mt-2 d-flex gap-2 flex-wrap">
+                              <span className="badge bg-success">
+                                Votes: {Number(viewWinner.voteCount || 0)}
+                              </span>
+                              <span className="badge bg-dark">Total: {viewTotalVotes}</span>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-muted">No candidates.</div>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  <div className="col-md-4">
-                    <div className="p-3 border rounded">
-                      <div className="text-muted small">Registered</div>
-                      <div className="fs-3 fw-bold">{reportView.registered ?? "—"}</div>
-                      <div className="text-muted small mt-1">
-                        Voted: <b>{reportView.voted ?? "—"}</b> • Not voted:{" "}
-                        <b>{reportView.registered_not_voted ?? "—"}</b>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="col-md-4">
-                    <div className="p-3 border rounded">
-                      <div className="text-muted small">Leader / Winner</div>
-                      {viewWinner ? (
-                        <>
-                          {/* ✅ show winner image here too */}
-                          <CandidateCell c={viewWinner} />
-                          <div className="mt-2 d-flex gap-2 flex-wrap">
-                            <span className="badge bg-success">
-                              Votes: {Number(viewWinner.voteCount || 0)}
-                            </span>
-                            <span className="badge bg-dark">Total: {viewTotalVotes}</span>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="text-muted">No candidates.</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Candidate totals (with image) */}
-                <div className="table-responsive mb-3">
-                  <table className="table table-striped table-bordered align-middle">
-                    <thead className="table-dark">
-                      <tr>
-                        <th style={{ width: 70 }}>ID</th>
-                        <th>Candidate</th>
-                        <th>Party</th>
-                        <th style={{ width: 120 }}>Votes</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {viewCandidates.map((c) => (
-                        <tr key={c.id}>
-                          <td className="text-center fw-bold">{c.id}</td>
-                          {/* ✅ FIX: show image */}
-                          <td><CandidateCell c={c} /></td>
-                          <td>{c.party || "-"}</td>
-                          <td className="text-center fw-bold">{Number(c.voteCount || 0)}</td>
-                        </tr>
-                      ))}
-                      {viewCandidates.length === 0 && (
-                        <tr>
-                          <td colSpan={4} className="text-center text-muted py-4">
-                            No candidates.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Registered & Voted */}
-                <div className="mt-4">
-                  <div className="d-flex align-items-center justify-content-between mb-2">
-                    <h6 className="mb-0">Registered & Voted</h6>
-                    <span className="badge bg-dark">Count: {votedList.length}</span>
-                  </div>
-                  <div className="table-responsive" style={{ maxHeight: 360, overflow: "auto" }}>
-                    <table className="table table-sm table-striped table-bordered align-middle">
+                  <div className="table-responsive mb-3">
+                    <table className="table table-striped table-bordered align-middle">
                       <thead className="table-dark">
                         <tr>
-                          <th style={{ width: 220 }}>Voted At</th>
-                          <th style={{ width: 180 }}>ID Number</th>
-                          <th>Name</th>
-                          <th style={{ width: 90 }}>Age</th>
-                          <th style={{ width: 130 }}>Card</th>
+                          <th style={{ width: 70 }}>ID</th>
+                          <th>Candidate</th>
+                          <th>Party</th>
+                          <th style={{ width: 120 }}>Votes</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {votedList.map((v) => (
-                          <tr key={`${v.voter_uuid}-${v.voted_at}`} className={rowClass(v)}>
-                            <td>{v.voted_at ? new Date(v.voted_at).toLocaleString() : "—"}</td>
-                            <td className="fw-semibold">{v.id_number || "—"}</td>
-                            <td>{v.name_en || v.name_kh || "—"}</td>
-                            <td className="text-center">{v.age ?? "—"}</td>
-                            <td className="text-center">
-                              {v.expired ? (
-                                <span className="badge bg-danger">Expired</span>
-                              ) : v.under18 ? (
-                                <span className="badge bg-warning text-dark">Under 18</span>
-                              ) : (
-                                <span className="badge bg-success">OK</span>
-                              )}
-                            </td>
+                        {viewCandidates.map((c) => (
+                          <tr key={c.id}>
+                            <td className="text-center fw-bold">{c.id}</td>
+                            <td><CandidateCell c={c} /></td>
+                            <td>{c.party || "-"}</td>
+                            <td className="text-center fw-bold">{Number(c.voteCount || 0)}</td>
                           </tr>
                         ))}
-                        {votedList.length === 0 && (
+                        {viewCandidates.length === 0 && (
                           <tr>
-                            <td colSpan={5} className="text-center text-muted py-3">
-                              No data
+                            <td colSpan={4} className="text-center text-muted py-4">
+                              No candidates.
                             </td>
                           </tr>
                         )}
                       </tbody>
                     </table>
                   </div>
-                </div>
 
-                {/* Registered but not voted */}
-                {Array.isArray(reportView?.votersRegisteredNotVoted) && (
                   <div className="mt-4">
                     <div className="d-flex align-items-center justify-content-between mb-2">
-                      <h6 className="mb-0">Registered but did not vote</h6>
-                      <span className="badge bg-dark">
-                        Count: {reportView.votersRegisteredNotVoted.length}
-                      </span>
+                      <h6 className="mb-0">Registered & Voted</h6>
+                      <span className="badge bg-dark">Count: {votedList.length}</span>
                     </div>
-
                     <div className="table-responsive" style={{ maxHeight: 360, overflow: "auto" }}>
                       <table className="table table-sm table-striped table-bordered align-middle">
                         <thead className="table-dark">
                           <tr>
-                            <th style={{ width: 220 }}>Registered At</th>
+                            <th style={{ width: 220 }}>Voted At</th>
                             <th style={{ width: 180 }}>ID Number</th>
                             <th>Name</th>
                             <th style={{ width: 90 }}>Age</th>
@@ -858,9 +805,9 @@ export default function ElectionAdmin() {
                           </tr>
                         </thead>
                         <tbody>
-                          {reportView.votersRegisteredNotVoted.map((v) => (
-                            <tr key={`${v.voter_uuid}-${v.registered_at}`} className={rowClass(v)}>
-                              <td>{v.registered_at ? new Date(v.registered_at).toLocaleString() : "—"}</td>
+                          {votedList.map((v) => (
+                            <tr key={`${v.voter_uuid}-${v.voted_at}`} className={rowClass(v)}>
+                              <td>{v.voted_at ? new Date(v.voted_at).toLocaleString() : "—"}</td>
                               <td className="fw-semibold">{v.id_number || "—"}</td>
                               <td>{v.name_en || v.name_kh || "—"}</td>
                               <td className="text-center">{v.age ?? "—"}</td>
@@ -875,7 +822,7 @@ export default function ElectionAdmin() {
                               </td>
                             </tr>
                           ))}
-                          {reportView.votersRegisteredNotVoted.length === 0 && (
+                          {votedList.length === 0 && (
                             <tr>
                               <td colSpan={5} className="text-center text-muted py-3">
                                 No data
@@ -886,60 +833,110 @@ export default function ElectionAdmin() {
                       </table>
                     </div>
                   </div>
-                )}
 
-                {/* Not registered */}
-                {Array.isArray(reportView?.votersNotRegistered) && (
-                  <div className="mt-4">
-                    <div className="d-flex align-items-center justify-content-between mb-2">
-                      <h6 className="mb-0">Did not register (no token request)</h6>
-                      <span className="badge bg-dark">Count: {reportView.votersNotRegistered.length}</span>
-                    </div>
+                  {Array.isArray(reportView?.votersRegisteredNotVoted) && (
+                    <div className="mt-4">
+                      <div className="d-flex align-items-center justify-content-between mb-2">
+                        <h6 className="mb-0">Registered but did not vote</h6>
+                        <span className="badge bg-dark">
+                          Count: {reportView.votersRegisteredNotVoted.length}
+                        </span>
+                      </div>
 
-                    <div className="table-responsive" style={{ maxHeight: 360, overflow: "auto" }}>
-                      <table className="table table-sm table-striped table-bordered align-middle">
-                        <thead className="table-dark">
-                          <tr>
-                            <th style={{ width: 180 }}>ID Number</th>
-                            <th>Name</th>
-                            <th style={{ width: 90 }}>Age</th>
-                            <th style={{ width: 140 }}>Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {reportView.votersNotRegistered.map((v) => (
-                            <tr key={v.voter_uuid} className={rowClass(v)}>
-                              <td className="fw-semibold">{v.id_number || "—"}</td>
-                              <td>{v.name_en || v.name_kh || "—"}</td>
-                              <td className="text-center">{v.age ?? "—"}</td>
-                              <td className="text-center">
-                                {v.expired ? (
-                                  <span className="badge bg-danger">Expired</span>
-                                ) : v.under18 ? (
-                                  <span className="badge bg-warning text-dark">Under 18</span>
-                                ) : (
-                                  <span className="badge bg-secondary">Eligible</span>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                          {reportView.votersNotRegistered.length === 0 && (
+                      <div className="table-responsive" style={{ maxHeight: 360, overflow: "auto" }}>
+                        <table className="table table-sm table-striped table-bordered align-middle">
+                          <thead className="table-dark">
                             <tr>
-                              <td colSpan={4} className="text-center text-muted py-3">
-                                No data
-                              </td>
+                              <th style={{ width: 220 }}>Registered At</th>
+                              <th style={{ width: 180 }}>ID Number</th>
+                              <th>Name</th>
+                              <th style={{ width: 90 }}>Age</th>
+                              <th style={{ width: 130 }}>Card</th>
                             </tr>
-                          )}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {reportView.votersRegisteredNotVoted.map((v) => (
+                              <tr key={`${v.voter_uuid}-${v.registered_at}`} className={rowClass(v)}>
+                                <td>{v.registered_at ? new Date(v.registered_at).toLocaleString() : "—"}</td>
+                                <td className="fw-semibold">{v.id_number || "—"}</td>
+                                <td>{v.name_en || v.name_kh || "—"}</td>
+                                <td className="text-center">{v.age ?? "—"}</td>
+                                <td className="text-center">
+                                  {v.expired ? (
+                                    <span className="badge bg-danger">Expired</span>
+                                  ) : v.under18 ? (
+                                    <span className="badge bg-warning text-dark">Under 18</span>
+                                  ) : (
+                                    <span className="badge bg-success">OK</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                            {reportView.votersRegisteredNotVoted.length === 0 && (
+                              <tr>
+                                <td colSpan={5} className="text-center text-muted py-3">
+                                  No data
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </>
-            )}
+                  )}
+
+                  {Array.isArray(reportView?.votersNotRegistered) && (
+                    <div className="mt-4">
+                      <div className="d-flex align-items-center justify-content-between mb-2">
+                        <h6 className="mb-0">Did not register (no token request)</h6>
+                        <span className="badge bg-dark">Count: {reportView.votersNotRegistered.length}</span>
+                      </div>
+
+                      <div className="table-responsive" style={{ maxHeight: 360, overflow: "auto" }}>
+                        <table className="table table-sm table-striped table-bordered align-middle">
+                          <thead className="table-dark">
+                            <tr>
+                              <th style={{ width: 180 }}>ID Number</th>
+                              <th>Name</th>
+                              <th style={{ width: 90 }}>Age</th>
+                              <th style={{ width: 140 }}>Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reportView.votersNotRegistered.map((v) => (
+                              <tr key={v.voter_uuid} className={rowClass(v)}>
+                                <td className="fw-semibold">{v.id_number || "—"}</td>
+                                <td>{v.name_en || v.name_kh || "—"}</td>
+                                <td className="text-center">{v.age ?? "—"}</td>
+                                <td className="text-center">
+                                  {v.expired ? (
+                                    <span className="badge bg-danger">Expired</span>
+                                  ) : v.under18 ? (
+                                    <span className="badge bg-warning text-dark">Under 18</span>
+                                  ) : (
+                                    <span className="badge bg-secondary">Eligible</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                            {reportView.votersNotRegistered.length === 0 && (
+                              <tr>
+                                <td colSpan={4} className="text-center text-muted py-3">
+                                  No data
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </AdminShell>
   );
 }
