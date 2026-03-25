@@ -64,12 +64,19 @@ function CandidateCell({ c }) {
   const photo = String(c?.photo_url || "").trim();
 
   return (
-    <div className="d-flex align-items-center gap-2">
+    <div className="d-flex align-items-center gap-3">
       {photo ? (
         <img
           src={photo}
           alt="candidate"
-          style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 10 }}
+          style={{
+            width: 48,
+            height: 48,
+            objectFit: "cover",
+            borderRadius: 12,
+            border: "2px solid rgba(212,175,55,.25)",
+            background: "#fff",
+          }}
           onError={(e) => {
             e.currentTarget.style.display = "none";
           }}
@@ -77,14 +84,15 @@ function CandidateCell({ c }) {
       ) : (
         <div
           style={{
-            width: 44,
-            height: 44,
-            borderRadius: 10,
-            background: "#eee",
+            width: 48,
+            height: 48,
+            borderRadius: 12,
+            background: "linear-gradient(135deg,#f4ecd0,#ffffff)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             fontWeight: 800,
+            border: "2px solid rgba(212,175,55,.25)",
           }}
         >
           👤
@@ -92,7 +100,7 @@ function CandidateCell({ c }) {
       )}
 
       <div>
-        <div className="fw-semibold">{nameEn}</div>
+        <div className="fw-semibold" style={{ color: "#00113a" }}>{nameEn}</div>
         {nameKh ? <div className="text-muted small">{nameKh}</div> : null}
       </div>
     </div>
@@ -382,40 +390,518 @@ export default function ElectionAdmin() {
   const votedList = reportView?.votersRegisteredVoted || reportView?.votersVoted || [];
 
   return (
-    <AdminShell active="elections" onLogout={logout} adminName="Admin">
-      <div className="container py-4" style={{ maxWidth: 1100 }}>
-        <div className="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
-          <div>
-            <h3 className="mb-1">🛠️ KampuVote Admin Console</h3>
-            <div className="text-muted">
-              Flow: <b>1) Create Draft</b> → <b>2) Add Candidates</b> → <b>3) Set Period</b> →{" "}
-              <b>4) Monitor Report</b> → <b>5) After End, create next Draft</b>.
+    <AdminShell
+      active="elections"
+      onLogout={logout}
+      adminName="Admin"
+      title="Election Administration"
+      subtitle="Royal Government styled election management console for draft creation, candidate registration, scheduling, and archived results."
+    >
+      <style>{`
+        .ea-page{
+          color:#191c1d;
+        }
+
+        .ea-watermark{
+          background-image:url("data:image/svg+xml,%3Csvg width='84' height='84' viewBox='0 0 84 84' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23d4af37' fill-opacity='0.06'%3E%3Cpath d='M42 10l5.5 18.5L66 34l-18.5 5.5L42 58l-5.5-18.5L18 34l18.5-5.5z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+        }
+
+        .ea-hero{
+          position:relative;
+          overflow:hidden;
+          background:linear-gradient(135deg,#00113a 0%, #002366 55%, #0d2f7a 100%);
+          color:#fff;
+          border-radius:18px;
+          padding:28px 28px 24px;
+          border-bottom:4px solid #fed65b;
+          box-shadow:0 18px 34px rgba(0,17,58,.16);
+          margin-bottom:24px;
+        }
+
+        .ea-hero::after{
+          content:"";
+          position:absolute;
+          inset:0;
+          background:linear-gradient(135deg,rgba(255,255,255,.06),transparent 40%);
+          pointer-events:none;
+        }
+
+        .ea-hero-inner{
+          position:relative;
+          z-index:2;
+          display:flex;
+          align-items:flex-end;
+          justify-content:space-between;
+          gap:18px;
+          flex-wrap:wrap;
+        }
+
+        .ea-kicker{
+          display:flex;
+          align-items:center;
+          gap:12px;
+          margin-bottom:10px;
+        }
+
+        .ea-kicker-line{
+          width:34px;
+          height:1px;
+          background:#ffe088;
+        }
+
+        .ea-kicker-text{
+          color:#ffe088;
+          font-size:11px;
+          font-weight:900;
+          letter-spacing:.18em;
+          text-transform:uppercase;
+        }
+
+        .ea-title-kh{
+          margin:0;
+          font-size:34px;
+          line-height:1.08;
+          font-weight:900;
+          letter-spacing:-.03em;
+        }
+
+        .ea-title-en{
+          margin:8px 0 0;
+          font-size:15px;
+          color:#cdd8ff;
+          font-weight:700;
+        }
+
+        .ea-flow{
+          margin-top:12px;
+          color:rgba(255,255,255,.84);
+          font-size:13px;
+          font-weight:600;
+          line-height:1.7;
+          max-width:760px;
+        }
+
+        .ea-status{
+          min-width:300px;
+          background:rgba(255,255,255,.08);
+          border:1px solid rgba(255,255,255,.12);
+          border-radius:16px;
+          padding:16px 18px;
+          backdrop-filter:blur(8px);
+        }
+
+        .ea-status-top{
+          display:flex;
+          align-items:center;
+          justify-content:space-between;
+          gap:12px;
+          margin-bottom:8px;
+        }
+
+        .ea-status-label{
+          margin:0;
+          color:#ffe088;
+          font-size:11px;
+          font-weight:900;
+          letter-spacing:.16em;
+          text-transform:uppercase;
+        }
+
+        .ea-status-meta{
+          color:rgba(255,255,255,.76);
+          font-size:12px;
+          font-weight:700;
+        }
+
+        .ea-refresh{
+          color:#b9c8ff;
+          font-size:12px;
+          font-weight:700;
+        }
+
+        .ea-alert .alert{
+          border:none;
+          border-radius:14px;
+          box-shadow:0 10px 22px rgba(0,0,0,.05);
+        }
+
+        .ea-stat-card{
+          background:#fff;
+          border:none;
+          border-radius:16px;
+          box-shadow:0 10px 24px rgba(0,17,58,.07);
+          overflow:hidden;
+          height:100%;
+        }
+
+        .ea-stat-card .card-body{
+          padding:22px 22px 20px;
+          position:relative;
+        }
+
+        .ea-stat-card .card-body::before{
+          content:"";
+          position:absolute;
+          left:0;
+          top:0;
+          bottom:0;
+          width:4px;
+          background:#d4af37;
+        }
+
+        .ea-stat-label{
+          margin-bottom:8px;
+          color:#757682;
+          font-size:11px;
+          font-weight:900;
+          letter-spacing:.14em;
+          text-transform:uppercase;
+        }
+
+        .ea-stat-value{
+          color:#00113a;
+        }
+
+        .ea-progress{
+          height:10px !important;
+          border-radius:999px;
+          overflow:hidden;
+          background:#edf0f5;
+        }
+
+        .ea-tabs{
+          display:flex;
+          gap:12px;
+          flex-wrap:wrap;
+          margin:10px 0 22px;
+        }
+
+        .ea-tab{
+          border:none;
+          border-radius:999px;
+          padding:12px 18px;
+          background:#fff;
+          color:#00113a;
+          font-size:12px;
+          font-weight:900;
+          letter-spacing:.06em;
+          box-shadow:0 8px 18px rgba(0,17,58,.06);
+          transition:.18s ease;
+        }
+
+        .ea-tab:hover{
+          transform:translateY(-1px);
+        }
+
+        .ea-tab.active{
+          background:linear-gradient(135deg,#00113a,#002f7a);
+          color:#ffe088;
+          border:1px solid rgba(212,175,55,.28);
+        }
+
+        .ea-panel{
+          background:#fff;
+          border:none;
+          border-radius:18px;
+          box-shadow:0 14px 28px rgba(0,17,58,.08);
+          overflow:hidden;
+        }
+
+        .ea-panel-head{
+          background:linear-gradient(180deg,#fff9e7 0%, #ffffff 100%);
+          border-bottom:1px solid rgba(212,175,55,.22);
+          padding:18px 24px;
+        }
+
+        .ea-panel-title{
+          margin:0;
+          color:#00113a;
+          font-size:20px;
+          font-weight:900;
+          letter-spacing:-.02em;
+        }
+
+        .ea-panel-sub{
+          margin:6px 0 0;
+          color:#6b7280;
+          font-size:13px;
+          font-weight:600;
+        }
+
+        .ea-step{
+          border:1px solid rgba(212,175,55,.22);
+          border-radius:16px;
+          padding:18px;
+          background:linear-gradient(180deg,#fffefb,#ffffff);
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.7);
+        }
+
+        .ea-step-title{
+          margin:0;
+          color:#00113a;
+          font-size:16px;
+          font-weight:900;
+        }
+
+        .ea-step-sub{
+          margin:6px 0 0;
+          color:#6b7280;
+          font-size:13px;
+          font-weight:600;
+        }
+
+        .ea-soft-box{
+          border:1px solid rgba(117,118,130,.16);
+          border-radius:16px;
+          background:#fafbfc;
+          padding:18px;
+        }
+
+        .ea-soft-mini{
+          border:1px solid rgba(212,175,55,.18);
+          border-radius:14px;
+          background:linear-gradient(180deg,#fffef8,#ffffff);
+          padding:18px;
+          height:100%;
+        }
+
+        .ea-soft-title{
+          color:#757682;
+          font-size:11px;
+          font-weight:900;
+          letter-spacing:.14em;
+          text-transform:uppercase;
+          margin-bottom:8px;
+        }
+
+        .ea-form-label{
+          color:#00113a;
+          font-size:12px;
+          font-weight:900;
+          letter-spacing:.04em;
+          margin-bottom:8px;
+        }
+
+        .ea-input,
+        .ea-select{
+          min-height:46px;
+          border-radius:12px !important;
+          border:1px solid #d9dde4 !important;
+          box-shadow:none !important;
+        }
+
+        .ea-input:focus,
+        .ea-select:focus{
+          border-color:#735c00 !important;
+          box-shadow:0 0 0 .2rem rgba(212,175,55,.18) !important;
+        }
+
+        .ea-btn-primary{
+          background:linear-gradient(135deg,#00113a,#002f7a);
+          border:none;
+          color:#ffe088;
+          border-radius:12px;
+          padding:10px 18px;
+          font-weight:800;
+          box-shadow:0 10px 18px rgba(0,17,58,.14);
+        }
+
+        .ea-btn-gold{
+          background:linear-gradient(135deg,#b98a1d,#d4af37);
+          border:none;
+          color:#fff;
+          border-radius:12px;
+          padding:10px 18px;
+          font-weight:800;
+          box-shadow:0 10px 18px rgba(185,138,29,.18);
+        }
+
+        .ea-btn-light{
+          background:#fff;
+          border:1px solid rgba(117,118,130,.25);
+          color:#00113a;
+          border-radius:12px;
+          padding:10px 18px;
+          font-weight:800;
+        }
+
+        .ea-btn-primary:disabled,
+        .ea-btn-gold:disabled,
+        .ea-btn-light:disabled{
+          opacity:.68;
+        }
+
+        .ea-table-wrap{
+          border:1px solid rgba(117,118,130,.12);
+          border-radius:16px;
+          overflow:hidden;
+          background:#fff;
+        }
+
+        .ea-table{
+          margin-bottom:0;
+        }
+
+        .ea-table thead th{
+          background:linear-gradient(180deg,#00113a 0%, #002366 100%) !important;
+          color:#ffe088 !important;
+          border-color:rgba(255,255,255,.08) !important;
+          font-size:11px;
+          font-weight:900;
+          letter-spacing:.12em;
+          text-transform:uppercase;
+          padding:14px 14px;
+          vertical-align:middle;
+        }
+
+        .ea-table tbody td{
+          padding:14px 14px;
+          vertical-align:middle;
+          border-color:#edf0f4;
+        }
+
+        .ea-table tbody tr:hover{
+          background:#fbfcff;
+        }
+
+        .ea-report-top{
+          display:flex;
+          align-items:flex-start;
+          justify-content:space-between;
+          gap:18px;
+          flex-wrap:wrap;
+          margin-bottom:18px;
+        }
+
+        .ea-report-title{
+          margin:0;
+          color:#00113a;
+          font-size:22px;
+          font-weight:900;
+          letter-spacing:-.02em;
+        }
+
+        .ea-report-sub{
+          margin:6px 0 0;
+          color:#6b7280;
+          font-size:13px;
+          font-weight:600;
+        }
+
+        .ea-pill-row{
+          display:flex;
+          flex-wrap:wrap;
+          gap:10px;
+          margin-bottom:16px;
+        }
+
+        .ea-pill{
+          display:inline-flex;
+          align-items:center;
+          gap:8px;
+          padding:8px 12px;
+          border-radius:999px;
+          background:#eef2fa;
+          color:#00113a;
+          font-size:11px;
+          font-weight:900;
+          letter-spacing:.08em;
+          text-transform:uppercase;
+        }
+
+        .ea-count-badge{
+          background:#00113a !important;
+          color:#ffe088 !important;
+          border-radius:999px;
+          padding:8px 12px;
+          font-size:11px;
+          font-weight:900;
+          letter-spacing:.08em;
+        }
+
+        .ea-section-title{
+          color:#00113a;
+          font-size:16px;
+          font-weight:900;
+        }
+
+        .ea-muted-note{
+          color:#6b7280;
+          font-size:13px;
+          font-weight:600;
+        }
+
+        .ea-empty{
+          color:#6b7280;
+          font-weight:600;
+        }
+
+        @media (max-width: 820px){
+          .ea-title-kh{
+            font-size:28px;
+          }
+          .ea-status{
+            width:100%;
+            min-width:auto;
+          }
+          .ea-report-top{
+            flex-direction:column;
+          }
+        }
+      `}</style>
+
+      <div className="container py-4 ea-page">
+        <section className="ea-hero ea-watermark">
+          <div className="ea-hero-inner">
+            <div>
+              <div className="ea-kicker">
+                <span className="ea-kicker-line" />
+                <span className="ea-kicker-text">
+                  Kingdom of Cambodia • National Election Committee
+                </span>
+              </div>
+
+              <h2 className="ea-title-kh">ផ្ទាំងគ្រប់គ្រងការបោះឆ្នោតជាតិ</h2>
+              <p className="ea-title-en">Official Election Administration Console</p>
+
+              <div className="ea-flow">
+                Flow: <b>1) Create Draft</b> → <b>2) Add Candidates</b> → <b>3) Set Period</b> →{" "}
+                <b>4) Monitor Report</b> → <b>5) After End, create next Draft</b>
+              </div>
+            </div>
+
+            <div className="ea-status">
+              <div className="ea-status-top">
+                <p className="ea-status-label mb-0">Current Election</p>
+                <span className={`badge ${phaseBadge.cls}`}>{phaseBadge.text}</span>
+              </div>
+
+              <div className="ea-status-meta mb-2">
+                Election ID: <b>#{status.election_id || "—"}</b>
+              </div>
+
+              <div className="ea-refresh">Auto refresh: every 3s</div>
             </div>
           </div>
+        </section>
 
-          <div className="text-end">
-            <div className="d-flex align-items-center justify-content-end gap-2">
-              <span className="text-muted small">Current Election</span>
-              <span className="badge bg-dark">#{status.election_id || "—"}</span>
-              <span className={`badge ${phaseBadge.cls}`}>{phaseBadge.text}</span>
-            </div>
-            <div className="small text-muted mt-1">Auto refresh: every 3s</div>
+        {msg && (
+          <div className="ea-alert mb-4">
+            <div className={`alert alert-${msg.type} shadow-sm`}>{msg.text}</div>
           </div>
-        </div>
+        )}
 
-        {msg && <div className={`alert alert-${msg.type} shadow-sm`}>{msg.text}</div>}
-
-        <div className="row g-3 mb-3">
+        <div className="row g-3 mb-4">
           <div className="col-md-4">
-            <div className="card shadow-sm">
+            <div className="card ea-stat-card">
               <div className="card-body">
-                <div className="text-muted small">Voting period (CURRENT)</div>
-                <div className="fw-semibold">
+                <div className="ea-stat-label">Voting Period (Current)</div>
+                <div className="fw-semibold ea-stat-value">
                   {fmtTs(status.start_ts)} → {fmtTs(status.end_ts)}
                 </div>
 
                 {status.configured ? (
-                  <div className="progress mt-3" style={{ height: 10 }}>
+                  <div className="progress ea-progress mt-3">
                     <div
                       className={`progress-bar ${status.active_chain ? "bg-success" : "bg-secondary"}`}
                       role="progressbar"
@@ -434,10 +920,12 @@ export default function ElectionAdmin() {
           </div>
 
           <div className="col-md-4">
-            <div className="card shadow-sm">
+            <div className="card ea-stat-card">
               <div className="card-body">
-                <div className="text-muted small">Registrations (CURRENT)</div>
-                <div className="display-6 mb-0">{currentReport?.registered ?? "—"}</div>
+                <div className="ea-stat-label">Registrations (Current)</div>
+                <div className="display-6 mb-0 ea-stat-value">
+                  {currentReport?.registered ?? "—"}
+                </div>
                 <div className="text-muted small mt-2">
                   Voted: <b>{currentReport?.voted ?? "—"}</b> • Not voted:{" "}
                   <b>{currentReport?.registered_not_voted ?? "—"}</b>
@@ -447,76 +935,91 @@ export default function ElectionAdmin() {
           </div>
 
           <div className="col-md-4">
-            <div className="card shadow-sm">
+            <div className="card ea-stat-card">
               <div className="card-body">
-                <div className="text-muted small">Winner / Leader (CURRENT)</div>
+                <div className="ea-stat-label">Winner / Leader (Current)</div>
                 {currentWinner ? (
                   <>
                     <CandidateCell c={currentWinner} />
-                    <div className="mt-2">
+                    <div className="mt-3 d-flex gap-2 flex-wrap">
                       <span className="badge bg-success">
                         Votes: {Number(currentWinner.voteCount || 0)}
                       </span>
-                      <span className="badge bg-dark ms-2">Total votes: {currentTotalVotes}</span>
+                      <span className="badge bg-dark">Total votes: {currentTotalVotes}</span>
                     </div>
                   </>
                 ) : (
-                  <div className="text-muted">No candidates yet.</div>
+                  <div className="ea-empty">No candidates yet.</div>
                 )}
               </div>
             </div>
           </div>
         </div>
 
-        <ul className="nav nav-pills mb-3">
-          <li className="nav-item">
-            <button className={`nav-link ${tab === "setup" ? "active" : ""}`} onClick={() => setTab("setup")}>
-              1) Draft & Period
-            </button>
-          </li>
-          <li className="nav-item">
-            <button className={`nav-link ${tab === "candidates" ? "active" : ""}`} onClick={() => setTab("candidates")}>
-              2) Candidates
-            </button>
-          </li>
-          <li className="nav-item">
-            <button className={`nav-link ${tab === "report" ? "active" : ""}`} onClick={() => setTab("report")}>
-              3) Report & Results (History)
-            </button>
-          </li>
-        </ul>
+        <div className="ea-tabs">
+          <button
+            className={`ea-tab ${tab === "setup" ? "active" : ""}`}
+            onClick={() => setTab("setup")}
+          >
+            1) Draft & Period
+          </button>
+          <button
+            className={`ea-tab ${tab === "candidates" ? "active" : ""}`}
+            onClick={() => setTab("candidates")}
+          >
+            2) Candidates
+          </button>
+          <button
+            className={`ea-tab ${tab === "report" ? "active" : ""}`}
+            onClick={() => setTab("report")}
+          >
+            3) Report & Results
+          </button>
+        </div>
 
         {tab === "setup" && (
-          <div className="card shadow-sm mb-4">
+          <div className="card ea-panel mb-4">
+            <div className="ea-panel-head">
+              <h5 className="ea-panel-title">Election Setup & Scheduling</h5>
+              <p className="ea-panel-sub">
+                Official administrative tools for draft creation and voting period control.
+              </p>
+            </div>
+
             <div className="card-body p-4">
-              <div className="p-3 border rounded mb-3">
-                <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+              <div className="ea-step mb-3">
+                <div className="d-flex flex-wrap align-items-center justify-content-between gap-3">
                   <div>
-                    <div className="fw-semibold">Step A — Create Draft Election</div>
-                    <div className="text-muted small">
+                    <h6 className="ea-step-title">Step A — Create Draft Election</h6>
+                    <p className="ea-step-sub">
                       Allowed only if there is no election or the previous election ended.
-                    </div>
+                    </p>
                   </div>
-                  <button className="btn btn-primary" disabled={busy || !canCreateDraft} onClick={createDraftElection}>
+
+                  <button
+                    className="btn ea-btn-primary"
+                    disabled={busy || !canCreateDraft}
+                    onClick={createDraftElection}
+                  >
                     {busy ? "Working..." : "Create Draft"}
                   </button>
                 </div>
               </div>
 
-              <div className="p-3 border rounded">
-                <div className="fw-semibold">Step B — Set Voting Period (Start/End)</div>
+              <div className="ea-soft-box">
+                <div className="ea-step-title mb-3">Step B — Set Voting Period (Start/End)</div>
 
                 {!canSetPeriod && (
-                  <div className="alert alert-info mt-3">
+                  <div className="alert alert-info mt-1">
                     You can set period only when election is in <b>DRAFT</b> phase.
                   </div>
                 )}
 
                 <form onSubmit={setElectionPeriod} className="row g-3">
                   <div className="col-md-6">
-                    <label className="form-label fw-semibold">Start (local time)</label>
+                    <label className="form-label ea-form-label">Start (local time)</label>
                     <input
-                      className="form-control"
+                      className="form-control ea-input"
                       type="datetime-local"
                       value={period.startLocal}
                       onChange={(e) => setPeriod((p) => ({ ...p, startLocal: e.target.value }))}
@@ -526,9 +1029,9 @@ export default function ElectionAdmin() {
                   </div>
 
                   <div className="col-md-6">
-                    <label className="form-label fw-semibold">End (local time)</label>
+                    <label className="form-label ea-form-label">End (local time)</label>
                     <input
-                      className="form-control"
+                      className="form-control ea-input"
                       type="datetime-local"
                       value={period.endLocal}
                       onChange={(e) => setPeriod((p) => ({ ...p, endLocal: e.target.value }))}
@@ -538,13 +1041,13 @@ export default function ElectionAdmin() {
                   </div>
 
                   <div className="col-12 d-flex flex-wrap gap-2">
-                    <button className="btn btn-success" disabled={busy || !canSetPeriod}>
+                    <button className="btn ea-btn-gold" disabled={busy || !canSetPeriod}>
                       {busy ? "Saving..." : "Set Period"}
                     </button>
 
                     <button
                       type="button"
-                      className="btn btn-outline-secondary"
+                      className="btn ea-btn-light"
                       disabled={busy}
                       onClick={() => {
                         setMsg(null);
@@ -563,7 +1066,14 @@ export default function ElectionAdmin() {
         )}
 
         {tab === "candidates" && (
-          <div className="card shadow-sm mb-4">
+          <div className="card ea-panel mb-4">
+            <div className="ea-panel-head">
+              <h5 className="ea-panel-title">Candidate Registration & Listing</h5>
+              <p className="ea-panel-sub">
+                Manage official candidate entries for the current election cycle.
+              </p>
+            </div>
+
             <div className="card-body p-4">
               {!status.election_id ? (
                 <div className="alert alert-info">
@@ -575,104 +1085,118 @@ export default function ElectionAdmin() {
                 </div>
               ) : null}
 
-              <form onSubmit={addCandidate} className="row g-3">
-                <div className="col-md-6">
-                  <label className="form-label fw-semibold">Name EN *</label>
-                  <input
-                    className="form-control"
-                    value={candForm.name_en}
-                    onChange={(e) => setCandForm((p) => ({ ...p, name_en: e.target.value }))}
-                    required
-                    disabled={!canAddCandidates || busy}
-                  />
-                </div>
-                <div className="col-md-6">
-                  <label className="form-label fw-semibold">Name KH</label>
-                  <input
-                    className="form-control"
-                    value={candForm.name_kh}
-                    onChange={(e) => setCandForm((p) => ({ ...p, name_kh: e.target.value }))}
-                    disabled={!canAddCandidates || busy}
-                  />
-                </div>
-                <div className="col-md-6">
-                  <label className="form-label fw-semibold">Party</label>
-                  <input
-                    className="form-control"
-                    value={candForm.party}
-                    onChange={(e) => setCandForm((p) => ({ ...p, party: e.target.value }))}
-                    disabled={!canAddCandidates || busy}
-                  />
-                </div>
-                <div className="col-md-6">
-                  <label className="form-label fw-semibold">Photo URL</label>
-                  <input
-                    className="form-control"
-                    value={candForm.photo_url}
-                    onChange={(e) => setCandForm((p) => ({ ...p, photo_url: e.target.value }))}
-                    disabled={!canAddCandidates || busy}
-                    placeholder="https://... (direct .jpg/.png preferred)"
-                  />
-                  <div className="form-text">
-                    Tip: Use a direct image URL (ends with .jpg/.png). Some links (Drive/Facebook) won’t render.
+              <div className="ea-soft-box mb-4">
+                <form onSubmit={addCandidate} className="row g-3">
+                  <div className="col-md-6">
+                    <label className="form-label ea-form-label">Name EN *</label>
+                    <input
+                      className="form-control ea-input"
+                      value={candForm.name_en}
+                      onChange={(e) => setCandForm((p) => ({ ...p, name_en: e.target.value }))}
+                      required
+                      disabled={!canAddCandidates || busy}
+                    />
                   </div>
-                </div>
 
-                <div className="col-12 d-flex gap-2">
-                  <button className="btn btn-success" disabled={!canAddCandidates || busy}>
-                    {busy ? "Adding..." : "Add Candidate"}
-                  </button>
-                </div>
-              </form>
+                  <div className="col-md-6">
+                    <label className="form-label ea-form-label">Name KH</label>
+                    <input
+                      className="form-control ea-input"
+                      value={candForm.name_kh}
+                      onChange={(e) => setCandForm((p) => ({ ...p, name_kh: e.target.value }))}
+                      disabled={!canAddCandidates || busy}
+                    />
+                  </div>
 
-              <hr className="my-4" />
+                  <div className="col-md-6">
+                    <label className="form-label ea-form-label">Party</label>
+                    <input
+                      className="form-control ea-input"
+                      value={candForm.party}
+                      onChange={(e) => setCandForm((p) => ({ ...p, party: e.target.value }))}
+                      disabled={!canAddCandidates || busy}
+                    />
+                  </div>
 
-              <div className="table-responsive">
-                <table className="table table-striped table-bordered align-middle">
-                  <thead className="table-dark">
-                    <tr>
-                      <th style={{ width: 70 }}>ID</th>
-                      <th>Candidate</th>
-                      <th>Party</th>
-                      <th style={{ width: 120 }}>Votes</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {currentCandidates.map((c) => (
-                      <tr key={c.id}>
-                        <td className="text-center fw-bold">{c.id}</td>
-                        <td><CandidateCell c={c} /></td>
-                        <td>{c.party || "-"}</td>
-                        <td className="text-center fw-bold">{Number(c.voteCount || 0)}</td>
-                      </tr>
-                    ))}
-                    {currentCandidates.length === 0 && (
+                  <div className="col-md-6">
+                    <label className="form-label ea-form-label">Photo URL</label>
+                    <input
+                      className="form-control ea-input"
+                      value={candForm.photo_url}
+                      onChange={(e) => setCandForm((p) => ({ ...p, photo_url: e.target.value }))}
+                      disabled={!canAddCandidates || busy}
+                      placeholder="https://... (direct .jpg/.png preferred)"
+                    />
+                    <div className="form-text">
+                      Tip: Use a direct image URL (ends with .jpg/.png). Some links (Drive/Facebook) won’t render.
+                    </div>
+                  </div>
+
+                  <div className="col-12 d-flex gap-2">
+                    <button className="btn ea-btn-primary" disabled={!canAddCandidates || busy}>
+                      {busy ? "Adding..." : "Add Candidate"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <div className="ea-table-wrap">
+                <div className="table-responsive">
+                  <table className="table ea-table align-middle">
+                    <thead>
                       <tr>
-                        <td colSpan={4} className="text-center text-muted py-4">
-                          No candidates yet.
-                        </td>
+                        <th style={{ width: 70 }}>ID</th>
+                        <th>Candidate</th>
+                        <th>Party</th>
+                        <th style={{ width: 120 }}>Votes</th>
                       </tr>
-                    )}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {currentCandidates.map((c) => (
+                        <tr key={c.id}>
+                          <td className="text-center fw-bold">{c.id}</td>
+                          <td><CandidateCell c={c} /></td>
+                          <td>{c.party || "-"}</td>
+                          <td className="text-center fw-bold">{Number(c.voteCount || 0)}</td>
+                        </tr>
+                      ))}
+                      {currentCandidates.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="text-center text-muted py-4">
+                            No candidates yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
         )}
 
         {tab === "report" && (
-          <div className="card shadow-sm">
+          <div className="card ea-panel">
+            <div className="ea-panel-head">
+              <h5 className="ea-panel-title">Election Report & Historical Archive</h5>
+              <p className="ea-panel-sub">
+                Review live statistics and archived election records from previous cycles.
+              </p>
+            </div>
+
             <div className="card-body p-4">
-              <div className="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
+              <div className="ea-report-top">
                 <div>
-                  <h5 className="mb-1">📊 Election Report (Current + History)</h5>
-                  <div className="text-muted small">Choose a past election to view archived data.</div>
+                  <h5 className="ea-report-title">Election Report (Current + History)</h5>
+                  <div className="ea-report-sub">
+                    Choose a past election to view archived data.
+                  </div>
                 </div>
 
                 <div className="d-flex flex-wrap gap-2 align-items-center">
-                  <div className="text-muted small">View:</div>
+                  <div className="ea-muted-note">View:</div>
                   <select
-                    className="form-select"
+                    className="form-select ea-select"
                     style={{ width: 320 }}
                     value={reportSel}
                     disabled={busy}
@@ -687,7 +1211,7 @@ export default function ElectionAdmin() {
                   </select>
 
                   <button
-                    className="btn btn-outline-primary"
+                    className="btn ea-btn-light"
                     disabled={busy}
                     onClick={() => {
                       setMsg(null);
@@ -700,8 +1224,8 @@ export default function ElectionAdmin() {
                 </div>
               </div>
 
-              <div className="d-flex align-items-center gap-2 mb-3">
-                <span className="badge bg-dark">
+              <div className="ea-pill-row">
+                <span className="ea-pill">
                   Viewing:{" "}
                   {reportSel === "current"
                     ? `Current #${status.election_id || "—"}`
@@ -714,24 +1238,26 @@ export default function ElectionAdmin() {
                 <div className="alert alert-info">No report data.</div>
               ) : (
                 <>
-                  <div className="row g-3 mb-3">
+                  <div className="row g-3 mb-4">
                     <div className="col-md-4">
-                      <div className="p-3 border rounded">
-                        <div className="text-muted small">Period</div>
+                      <div className="ea-soft-mini">
+                        <div className="ea-soft-title">Period</div>
                         <div className="fw-semibold">
                           {fmtTs(reportView.start_ts)} → {fmtTs(reportView.end_ts)}
                         </div>
-                        <div className="text-muted small mt-1">
+                        <div className="text-muted small mt-2">
                           Election ID: <b>{reportView.election_id ?? "—"}</b>
                         </div>
                       </div>
                     </div>
 
                     <div className="col-md-4">
-                      <div className="p-3 border rounded">
-                        <div className="text-muted small">Registered</div>
-                        <div className="fs-3 fw-bold">{reportView.registered ?? "—"}</div>
-                        <div className="text-muted small mt-1">
+                      <div className="ea-soft-mini">
+                        <div className="ea-soft-title">Registered</div>
+                        <div className="fs-3 fw-bold" style={{ color: "#00113a" }}>
+                          {reportView.registered ?? "—"}
+                        </div>
+                        <div className="text-muted small mt-2">
                           Voted: <b>{reportView.voted ?? "—"}</b> • Not voted:{" "}
                           <b>{reportView.registered_not_voted ?? "—"}</b>
                         </div>
@@ -739,12 +1265,12 @@ export default function ElectionAdmin() {
                     </div>
 
                     <div className="col-md-4">
-                      <div className="p-3 border rounded">
-                        <div className="text-muted small">Leader / Winner</div>
+                      <div className="ea-soft-mini">
+                        <div className="ea-soft-title">Leader / Winner</div>
                         {viewWinner ? (
                           <>
                             <CandidateCell c={viewWinner} />
-                            <div className="mt-2 d-flex gap-2 flex-wrap">
+                            <div className="mt-3 d-flex gap-2 flex-wrap">
                               <span className="badge bg-success">
                                 Votes: {Number(viewWinner.voteCount || 0)}
                               </span>
@@ -752,80 +1278,36 @@ export default function ElectionAdmin() {
                             </div>
                           </>
                         ) : (
-                          <div className="text-muted">No candidates.</div>
+                          <div className="ea-empty">No candidates.</div>
                         )}
                       </div>
                     </div>
                   </div>
 
-                  <div className="table-responsive mb-3">
-                    <table className="table table-striped table-bordered align-middle">
-                      <thead className="table-dark">
-                        <tr>
-                          <th style={{ width: 70 }}>ID</th>
-                          <th>Candidate</th>
-                          <th>Party</th>
-                          <th style={{ width: 120 }}>Votes</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {viewCandidates.map((c) => (
-                          <tr key={c.id}>
-                            <td className="text-center fw-bold">{c.id}</td>
-                            <td><CandidateCell c={c} /></td>
-                            <td>{c.party || "-"}</td>
-                            <td className="text-center fw-bold">{Number(c.voteCount || 0)}</td>
-                          </tr>
-                        ))}
-                        {viewCandidates.length === 0 && (
+                  <div className="ea-table-wrap mb-4">
+                    <div className="table-responsive">
+                      <table className="table ea-table align-middle">
+                        <thead>
                           <tr>
-                            <td colSpan={4} className="text-center text-muted py-4">
-                              No candidates.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="mt-4">
-                    <div className="d-flex align-items-center justify-content-between mb-2">
-                      <h6 className="mb-0">Registered & Voted</h6>
-                      <span className="badge bg-dark">Count: {votedList.length}</span>
-                    </div>
-                    <div className="table-responsive" style={{ maxHeight: 360, overflow: "auto" }}>
-                      <table className="table table-sm table-striped table-bordered align-middle">
-                        <thead className="table-dark">
-                          <tr>
-                            <th style={{ width: 220 }}>Voted At</th>
-                            <th style={{ width: 180 }}>ID Number</th>
-                            <th>Name</th>
-                            <th style={{ width: 90 }}>Age</th>
-                            <th style={{ width: 130 }}>Card</th>
+                            <th style={{ width: 70 }}>ID</th>
+                            <th>Candidate</th>
+                            <th>Party</th>
+                            <th style={{ width: 120 }}>Votes</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {votedList.map((v) => (
-                            <tr key={`${v.voter_uuid}-${v.voted_at}`} className={rowClass(v)}>
-                              <td>{v.voted_at ? new Date(v.voted_at).toLocaleString() : "—"}</td>
-                              <td className="fw-semibold">{v.id_number || "—"}</td>
-                              <td>{v.name_en || v.name_kh || "—"}</td>
-                              <td className="text-center">{v.age ?? "—"}</td>
-                              <td className="text-center">
-                                {v.expired ? (
-                                  <span className="badge bg-danger">Expired</span>
-                                ) : v.under18 ? (
-                                  <span className="badge bg-warning text-dark">Under 18</span>
-                                ) : (
-                                  <span className="badge bg-success">OK</span>
-                                )}
-                              </td>
+                          {viewCandidates.map((c) => (
+                            <tr key={c.id}>
+                              <td className="text-center fw-bold">{c.id}</td>
+                              <td><CandidateCell c={c} /></td>
+                              <td>{c.party || "-"}</td>
+                              <td className="text-center fw-bold">{Number(c.voteCount || 0)}</td>
                             </tr>
                           ))}
-                          {votedList.length === 0 && (
+                          {viewCandidates.length === 0 && (
                             <tr>
-                              <td colSpan={5} className="text-center text-muted py-3">
-                                No data
+                              <td colSpan={4} className="text-center text-muted py-4">
+                                No candidates.
                               </td>
                             </tr>
                           )}
@@ -834,20 +1316,18 @@ export default function ElectionAdmin() {
                     </div>
                   </div>
 
-                  {Array.isArray(reportView?.votersRegisteredNotVoted) && (
-                    <div className="mt-4">
-                      <div className="d-flex align-items-center justify-content-between mb-2">
-                        <h6 className="mb-0">Registered but did not vote</h6>
-                        <span className="badge bg-dark">
-                          Count: {reportView.votersRegisteredNotVoted.length}
-                        </span>
-                      </div>
+                  <div className="mt-4">
+                    <div className="d-flex align-items-center justify-content-between mb-2">
+                      <h6 className="ea-section-title mb-0">Registered & Voted</h6>
+                      <span className="ea-count-badge badge">Count: {votedList.length}</span>
+                    </div>
 
+                    <div className="ea-table-wrap">
                       <div className="table-responsive" style={{ maxHeight: 360, overflow: "auto" }}>
-                        <table className="table table-sm table-striped table-bordered align-middle">
-                          <thead className="table-dark">
+                        <table className="table table-sm ea-table align-middle">
+                          <thead>
                             <tr>
-                              <th style={{ width: 220 }}>Registered At</th>
+                              <th style={{ width: 220 }}>Voted At</th>
                               <th style={{ width: 180 }}>ID Number</th>
                               <th>Name</th>
                               <th style={{ width: 90 }}>Age</th>
@@ -855,9 +1335,9 @@ export default function ElectionAdmin() {
                             </tr>
                           </thead>
                           <tbody>
-                            {reportView.votersRegisteredNotVoted.map((v) => (
-                              <tr key={`${v.voter_uuid}-${v.registered_at}`} className={rowClass(v)}>
-                                <td>{v.registered_at ? new Date(v.registered_at).toLocaleString() : "—"}</td>
+                            {votedList.map((v) => (
+                              <tr key={`${v.voter_uuid}-${v.voted_at}`} className={rowClass(v)}>
+                                <td>{v.voted_at ? new Date(v.voted_at).toLocaleString() : "—"}</td>
                                 <td className="fw-semibold">{v.id_number || "—"}</td>
                                 <td>{v.name_en || v.name_kh || "—"}</td>
                                 <td className="text-center">{v.age ?? "—"}</td>
@@ -872,7 +1352,7 @@ export default function ElectionAdmin() {
                                 </td>
                               </tr>
                             ))}
-                            {reportView.votersRegisteredNotVoted.length === 0 && (
+                            {votedList.length === 0 && (
                               <tr>
                                 <td colSpan={5} className="text-center text-muted py-3">
                                   No data
@@ -883,51 +1363,108 @@ export default function ElectionAdmin() {
                         </table>
                       </div>
                     </div>
+                  </div>
+
+                  {Array.isArray(reportView?.votersRegisteredNotVoted) && (
+                    <div className="mt-4">
+                      <div className="d-flex align-items-center justify-content-between mb-2">
+                        <h6 className="ea-section-title mb-0">Registered but did not vote</h6>
+                        <span className="ea-count-badge badge">
+                          Count: {reportView.votersRegisteredNotVoted.length}
+                        </span>
+                      </div>
+
+                      <div className="ea-table-wrap">
+                        <div className="table-responsive" style={{ maxHeight: 360, overflow: "auto" }}>
+                          <table className="table table-sm ea-table align-middle">
+                            <thead>
+                              <tr>
+                                <th style={{ width: 220 }}>Registered At</th>
+                                <th style={{ width: 180 }}>ID Number</th>
+                                <th>Name</th>
+                                <th style={{ width: 90 }}>Age</th>
+                                <th style={{ width: 130 }}>Card</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {reportView.votersRegisteredNotVoted.map((v) => (
+                                <tr key={`${v.voter_uuid}-${v.registered_at}`} className={rowClass(v)}>
+                                  <td>{v.registered_at ? new Date(v.registered_at).toLocaleString() : "—"}</td>
+                                  <td className="fw-semibold">{v.id_number || "—"}</td>
+                                  <td>{v.name_en || v.name_kh || "—"}</td>
+                                  <td className="text-center">{v.age ?? "—"}</td>
+                                  <td className="text-center">
+                                    {v.expired ? (
+                                      <span className="badge bg-danger">Expired</span>
+                                    ) : v.under18 ? (
+                                      <span className="badge bg-warning text-dark">Under 18</span>
+                                    ) : (
+                                      <span className="badge bg-success">OK</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                              {reportView.votersRegisteredNotVoted.length === 0 && (
+                                <tr>
+                                  <td colSpan={5} className="text-center text-muted py-3">
+                                    No data
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
                   )}
 
                   {Array.isArray(reportView?.votersNotRegistered) && (
                     <div className="mt-4">
                       <div className="d-flex align-items-center justify-content-between mb-2">
-                        <h6 className="mb-0">Did not register (no token request)</h6>
-                        <span className="badge bg-dark">Count: {reportView.votersNotRegistered.length}</span>
+                        <h6 className="ea-section-title mb-0">Did not register (no token request)</h6>
+                        <span className="ea-count-badge badge">
+                          Count: {reportView.votersNotRegistered.length}
+                        </span>
                       </div>
 
-                      <div className="table-responsive" style={{ maxHeight: 360, overflow: "auto" }}>
-                        <table className="table table-sm table-striped table-bordered align-middle">
-                          <thead className="table-dark">
-                            <tr>
-                              <th style={{ width: 180 }}>ID Number</th>
-                              <th>Name</th>
-                              <th style={{ width: 90 }}>Age</th>
-                              <th style={{ width: 140 }}>Status</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {reportView.votersNotRegistered.map((v) => (
-                              <tr key={v.voter_uuid} className={rowClass(v)}>
-                                <td className="fw-semibold">{v.id_number || "—"}</td>
-                                <td>{v.name_en || v.name_kh || "—"}</td>
-                                <td className="text-center">{v.age ?? "—"}</td>
-                                <td className="text-center">
-                                  {v.expired ? (
-                                    <span className="badge bg-danger">Expired</span>
-                                  ) : v.under18 ? (
-                                    <span className="badge bg-warning text-dark">Under 18</span>
-                                  ) : (
-                                    <span className="badge bg-secondary">Eligible</span>
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
-                            {reportView.votersNotRegistered.length === 0 && (
+                      <div className="ea-table-wrap">
+                        <div className="table-responsive" style={{ maxHeight: 360, overflow: "auto" }}>
+                          <table className="table table-sm ea-table align-middle">
+                            <thead>
                               <tr>
-                                <td colSpan={4} className="text-center text-muted py-3">
-                                  No data
-                                </td>
+                                <th style={{ width: 180 }}>ID Number</th>
+                                <th>Name</th>
+                                <th style={{ width: 90 }}>Age</th>
+                                <th style={{ width: 140 }}>Status</th>
                               </tr>
-                            )}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody>
+                              {reportView.votersNotRegistered.map((v) => (
+                                <tr key={v.voter_uuid} className={rowClass(v)}>
+                                  <td className="fw-semibold">{v.id_number || "—"}</td>
+                                  <td>{v.name_en || v.name_kh || "—"}</td>
+                                  <td className="text-center">{v.age ?? "—"}</td>
+                                  <td className="text-center">
+                                    {v.expired ? (
+                                      <span className="badge bg-danger">Expired</span>
+                                    ) : v.under18 ? (
+                                      <span className="badge bg-warning text-dark">Under 18</span>
+                                    ) : (
+                                      <span className="badge bg-secondary">Eligible</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                              {reportView.votersNotRegistered.length === 0 && (
+                                <tr>
+                                  <td colSpan={4} className="text-center text-muted py-3">
+                                    No data
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
                     </div>
                   )}

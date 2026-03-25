@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import NecHeader from "../../components/NecHeader";
+import { useNavigate, useParams } from "react-router-dom";
+import UserShell from "../../components/UserShell";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
 
@@ -81,9 +81,7 @@ export default function TrackDocumentChangeRequestPage() {
   };
 
   return (
-    <>
-      <NecHeader />
-
+    <UserShell>
       <div className="tdcr-page">
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Kantumruy+Pro:wght@400;500;600;700&display=swap');
@@ -138,14 +136,6 @@ export default function TrackDocumentChangeRequestPage() {
             color:#64748b;
             font-size:14px;
             font-weight:700;
-            font-family:"Kantumruy Pro", Inter, sans-serif;
-          }
-
-          .tdcr-back{
-            text-decoration:none !important;
-            color:#0b61b0 !important;
-            font-size:15px;
-            font-weight:800;
             font-family:"Kantumruy Pro", Inter, sans-serif;
           }
 
@@ -329,10 +319,6 @@ export default function TrackDocumentChangeRequestPage() {
                   បញ្ចូលលេខតាមដានដែលបានផ្ញើទៅអ៊ីមែលរបស់អ្នក ដើម្បីពិនិត្យស្ថានភាពសំណើ
                 </p>
               </div>
-
-              <Link className="tdcr-back" to="/">
-                ← ត្រឡប់ទៅទំព័រដើម
-              </Link>
             </div>
           </div>
 
@@ -399,6 +385,6 @@ export default function TrackDocumentChangeRequestPage() {
           </div>
         </div>
       </div>
-    </>
+    </UserShell>
   );
 }
