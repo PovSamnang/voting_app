@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:voting_app/screens/candidate_list_screen.dart';
+import 'package:voting_app/services/auth_service.dart';
+import 'package:voting_app/widgets/election_phase_panel.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -13,13 +16,39 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final AuthService _auth = AuthService();
+
   String voterName = "Voter";
   bool loading = true;
+
+  bool _statusLoaded = false;
+  Map<String, dynamic> _status = {
+    "election_id": 0,
+    "configured": false,
+    "start_ts": 0,
+    "end_ts": 0,
+    "chain_now_ts": 0,
+    "next_transition_ts": 0,
+    "phase": "NONE",
+    "phase_label_kh": "មិនទាន់បើកវគ្គ",
+    "active_chain": false,
+  };
+
+  Timer? _phaseTimer;
+  int _phaseTick = 0;
 
   @override
   void initState() {
     super.initState();
     _loadVoterName();
+    _loadVotingStatus();
+    _startPhaseClock();
+  }
+
+  @override
+  void dispose() {
+    _phaseTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadVoterName() async {
@@ -37,6 +66,41 @@ class _HomeScreenState extends State<HomeScreen> {
     } else {
       setState(() => loading = false);
     }
+  }
+
+  Future<void> _loadVotingStatus() async {
+    try {
+      final s = await _auth.getVotingStatus();
+      if (!mounted) return;
+      setState(() {
+        _status = s;
+        _statusLoaded = true;
+      });
+    } catch (_) {}
+  }
+
+  void _startPhaseClock() {
+    _phaseTimer?.cancel();
+    _phaseTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || !_statusLoaded) return;
+
+      final phase = (_status["phase"] ?? "NONE").toString().toUpperCase();
+      final chainNow = int.tryParse("${_status["chain_now_ts"] ?? 0}") ?? 0;
+
+      if (phase == "BEFORE_START" || phase == "ACTIVE") {
+        setState(() {
+          _status = {
+            ..._status,
+            "chain_now_ts": chainNow + 1,
+          };
+        });
+      }
+
+      _phaseTick++;
+      if (_phaseTick % 5 == 0) {
+        _loadVotingStatus();
+      }
+    });
   }
 
   Widget _header() {
@@ -67,7 +131,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               SizedBox(height: 2),
               Text(
-                "Verified successfully ",
+                "បានផ្ទៀងផ្ទាត់ដោយជោគជ័យ",
                 style: TextStyle(color: Colors.white70, height: 1.2),
               ),
             ],
@@ -76,8 +140,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
     );
   }
-
-  
 
   Widget _infoBox() {
     return Container(
@@ -88,7 +150,7 @@ class _HomeScreenState extends State<HomeScreen> {
         border: Border.all(color: Colors.grey.shade200),
       ),
       child: const Text(
-        'អ្នកបានផ្ទៀងផ្ទាត់ព័ត៌មានដោយជោគជ័យ អ្នកមានសិទ្ធិក្នុងការបោះឆ្នោតក្នុងប្រព័ន្ធ blockchain voting system',
+        'អ្នកបានផ្ទៀងផ្ទាត់ព័ត៌មានដោយជោគជ័យ។ អ្នកអាចពិនិត្យស្ថានភាពវគ្គបោះឆ្នោត មើលបេក្ខជន និងបោះឆ្នោតនៅពេលប្រព័ន្ធអនុញ្ញាត។',
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 14, color: Colors.grey, height: 1.35),
       ),
@@ -116,8 +178,9 @@ class _HomeScreenState extends State<HomeScreen> {
             MaterialPageRoute(builder: (_) => const CandidateListScreen()),
           );
         },
+        icon: const Icon(Icons.how_to_vote_rounded),
         label: const Text(
-          "View Candidates",
+          "មើលបេក្ខជន និងបោះឆ្នោត",
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
         ),
         style: style,
@@ -145,9 +208,8 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           const Icon(Icons.verified_user_rounded, size: 100, color: Colors.green),
           const SizedBox(height: 14),
-
           Text(
-            "Welcome $voterName",
+            "សូមស្វាគមន៍ $voterName",
             textAlign: TextAlign.center,
             style: const TextStyle(
               fontSize: 22,
@@ -155,14 +217,15 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(height: 12),
-
           _infoBox(),
           const SizedBox(height: 18),
-
+          ElectionPhasePanel(
+            status: _status,
+            loaded: _statusLoaded,
+          ),
+          const SizedBox(height: 18),
           _primaryButton(),
-
           const SizedBox(height: 10),
-          
         ],
       ),
     );
@@ -174,7 +237,6 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: Colors.grey.shade50,
       body: Stack(
         children: [
-          //  Same gradient header like LoginScreen
           Container(
             height: 220,
             decoration: BoxDecoration(
@@ -189,7 +251,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-
           SafeArea(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
@@ -203,12 +264,10 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-
-          //  Same nice blur loading overlay
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 180),
             child: loading
-                ? const _BlockingLoadingOverlay(text: "Loading voter data...")
+                ? const _BlockingLoadingOverlay(text: "កំពុងទាញយកទិន្នន័យអ្នកបោះឆ្នោត...")
                 : const SizedBox.shrink(),
           ),
         ],
@@ -217,9 +276,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// =========================
-// Pretty loading overlay (same style as LoginScreen)
-// =========================
 class _BlockingLoadingOverlay extends StatelessWidget {
   final String text;
   const _BlockingLoadingOverlay({required this.text});
@@ -229,9 +285,7 @@ class _BlockingLoadingOverlay extends StatelessWidget {
     return SizedBox.expand(
       child: Stack(
         children: [
-          // blocks touch + dark background
           const ModalBarrier(dismissible: false, color: Colors.black54),
-
           Center(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(22),

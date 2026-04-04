@@ -8,21 +8,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 class AuthService {
   final String _baseUrl = 'http://172.20.10.5:3000/api';
 
-  // =========================
-  // Existing helper (keep)
-  // =========================
   Future<String> _imageToBase64(XFile imageFile) async {
     final bytes = await imageFile.readAsBytes();
     return base64Encode(bytes);
   }
 
-  // ✅ NEW: get saved JWT
   Future<String?> _getAuthToken() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('authToken');
   }
 
-  // ✅ NEW: common JSON headers (with optional JWT)
   Future<Map<String, String>> _headers({bool withAuth = false}) async {
     final h = <String, String>{'Content-Type': 'application/json'};
     if (withAuth) {
@@ -34,9 +29,6 @@ class AuthService {
     return h;
   }
 
-  // =========================
-  // QR resolve (keep)
-  // =========================
   Future<Map<String, dynamic>?> resolveQrToken(String token) async {
     try {
       final response = await http.get(Uri.parse('$_baseUrl/lookup-qr/$token'));
@@ -47,9 +39,6 @@ class AuthService {
     }
   }
 
-  // =========================
-  // Liveness (keep)
-  // =========================
   Future<bool> verifyLivenessFromBackendBase64(String faceBase64) async {
     try {
       final response = await http.post(
@@ -68,9 +57,6 @@ class AuthService {
     }
   }
 
-  // =========================
-  // ✅ Login flow (DO NOT CHANGE)
-  // =========================
   Future<String?> loginAndVerify({
     required String identificationValue,
     required String faceImagePath,
@@ -89,27 +75,23 @@ class AuthService {
       }),
     );
 
-      if (response.statusCode == 200) {
-    final body = json.decode(response.body);
-    final token = body['token'];
+    if (response.statusCode == 200) {
+      final body = json.decode(response.body);
+      final token = body['token'];
 
-    final prefs = await SharedPreferences.getInstance();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('authToken', token);
 
-    // ✅ Save JWT (existing behavior)
-    await prefs.setString('authToken', token);
+      if (body['voter'] != null) {
+        await prefs.setString(
+          'voterData',
+          jsonEncode(body['voter']),
+        );
+      }
 
-    // ✅ NEW: Save voter info (SAFE ADDITION)
-    if (body['voter'] != null) {
-      await prefs.setString(
-        'voterData',
-        jsonEncode(body['voter']),
-      );
+      return null;
     }
 
-    return null;
-  }
-
-    // safe decode (backend always returns json but just in case)
     try {
       final body = json.decode(response.body);
       return body['message'] ?? 'Login failed.';
@@ -118,10 +100,6 @@ class AuthService {
     }
   }
 
-  // =========================
-  // ✅ NEW: Fetch candidates (auto show)
-  // Backend route: GET /api/candidates (requires JWT)
-  // =========================
   Future<List<dynamic>> getCandidates() async {
     try {
       final jwt = await _getAuthToken();
@@ -142,12 +120,25 @@ class AuthService {
     }
   }
 
-  // =========================
-  // ✅ NEW: Vote with Gmail token
-  // Backend route: POST /api/vote (requires JWT)
-  // Body: { token: "0x...", candidate_id: 1 }
-  // Returns null if success, otherwise error message
-  // =========================
+  Future<Map<String, dynamic>> getVotingStatus() async {
+    final response = await http.get(
+      Uri.parse('$_baseUrl/voting-status'),
+      headers: await _headers(withAuth: false),
+    );
+
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      return Map<String, dynamic>.from(data);
+    }
+
+    try {
+      final body = json.decode(response.body);
+      throw Exception(body['message'] ?? 'Failed to load voting status');
+    } catch (_) {
+      throw Exception('Failed to load voting status');
+    }
+  }
+
   Future<String?> vote({
     required String votingTokenFromEmail,
     required int candidateId,
@@ -167,7 +158,6 @@ class AuthService {
 
       if (response.statusCode == 200) return null;
 
-      // backend sends json {message: "..."}
       try {
         final body = json.decode(response.body);
         return body['message'] ?? 'Vote failed.';
@@ -179,7 +169,6 @@ class AuthService {
     }
   }
 
-  // ✅ Optional helper: logout (doesn't affect login flow)
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('authToken');

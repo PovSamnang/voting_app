@@ -107,13 +107,22 @@ contract VotingTokenIssuer {
     event CandidateAdded(uint256 indexed electionId, uint256 indexed candidateId, string name_en);
     event VoteCast(uint256 indexed electionId, uint256 indexed candidateId);
 
+    event CandidateUpdated(uint256 indexed electionId, uint256 indexed candidateId, string name_en);
+    event CandidateStatusChanged(uint256 indexed electionId, uint256 indexed candidateId, bool is_active);
+
+    modifier onlyDraft(uint256 electionId) {
+    require(electionId >= 1 && electionId <= electionCount, "Bad electionId");
+    require(!electionConfigured[electionId], "Not registration stage");
+    _;
+}
+
     function addCandidate(
         uint256 electionId,
         string calldata name_en,
         string calldata name_kh,
         string calldata party,
         string calldata photo_url
-    ) external onlyOwner onlyBeforeStart(electionId) {
+    ) external onlyOwner onlyDraft(electionId) {
         require(electionId >= 1 && electionId <= electionCount, "Bad electionId");
         require(bytes(name_en).length > 0, "name_en required");
 
@@ -131,6 +140,41 @@ contract VotingTokenIssuer {
         });
 
         emit CandidateAdded(electionId, cid, name_en);
+    }
+
+    function updateCandidate(
+    uint256 electionId,
+    uint256 candidateId,
+    string calldata name_en,
+    string calldata name_kh,
+    string calldata party,
+    string calldata photo_url
+    ) external onlyOwner onlyBeforeStart(electionId) {
+    require(electionId >= 1 && electionId <= electionCount, "Bad electionId");
+    require(candidateId >= 1 && candidateId <= candidateCount[electionId], "Invalid candidate");
+    require(bytes(name_en).length > 0, "name_en required");
+
+    Candidate storage c = _candidates[electionId][candidateId];
+    c.name_en = name_en;
+    c.name_kh = name_kh;
+    c.party = party;
+    c.photo_url = photo_url;
+
+    emit CandidateUpdated(electionId, candidateId, name_en);
+}
+
+    function setCandidateActive(
+        uint256 electionId,
+        uint256 candidateId,
+        bool active
+    ) external onlyOwner onlyBeforeStart(electionId) {
+        require(electionId >= 1 && electionId <= electionCount, "Bad electionId");
+        require(candidateId >= 1 && candidateId <= candidateCount[electionId], "Invalid candidate");
+
+        Candidate storage c = _candidates[electionId][candidateId];
+        c.is_active = active;
+
+        emit CandidateStatusChanged(electionId, candidateId, active);
     }
 
     function getCandidate(uint256 electionId, uint256 candidateId) external view returns (
@@ -158,39 +202,47 @@ contract VotingTokenIssuer {
     event TokenIssued(uint256 indexed electionId, bytes32 token, uint64 expiresAt);
 
     function issueToken(uint256 electionId, uint64 ttlSeconds)
-        external
-        onlyOwner
-        onlyBeforeStart(electionId)
-        returns (bytes32 token)
-    {
-        require(electionId >= 1 && electionId <= electionCount, "Bad electionId");
-        require(ttlSeconds > 0, "Bad ttl");
+    external
+    onlyOwner
+    onlyBeforeStart(electionId)
+    returns (bytes32 token)
+{
+    require(electionId >= 1 && electionId <= electionCount, "Bad electionId");
+    require(ttlSeconds > 0, "Bad ttl");
 
-        uint64 exp = uint64(block.timestamp + ttlSeconds);
+    uint64 exp;
 
-        // If configured, cap to election end
-        if (electionConfigured[electionId]) {
-            uint64 endTs = votingEnd[electionId];
-            if (exp > endTs) exp = endTs;
-        }
+    // During registration stage (DRAFT), keep token usable until later.
+    // Voting is still blocked by whenElectionActive(), so token cannot be used early.
+    if (!electionConfigured[electionId]) {
+        exp = type(uint64).max;
+    } else {
+        exp = uint64(block.timestamp + ttlSeconds);
 
-        token = keccak256(
-            abi.encodePacked(electionId, nonce++, blockhash(block.number - 1), block.timestamp)
-        );
-
-        tokens[electionId][token] = TokenInfo(exp, false);
-        emit TokenIssued(electionId, token, exp);
-        return token;
+        uint64 endTs = votingEnd[electionId];
+        if (exp > endTs) exp = endTs;
     }
 
-    // ✅ token valid only if now < expiresAt  (expiresAt is EXCLUSIVE)
-    function validateToken(uint256 electionId, bytes32 token) public view returns (bool) {
-        TokenInfo memory t = tokens[electionId][token];
-        if (t.expiresAt == 0) return false;
-        if (t.used) return false;
-        if (block.timestamp >= t.expiresAt) return false;
-        return true;
-    }
+    token = keccak256(
+        abi.encodePacked(electionId, nonce++, blockhash(block.number - 1), block.timestamp)
+    );
+
+    tokens[electionId][token] = TokenInfo(exp, false);
+    emit TokenIssued(electionId, token, exp);
+    return token;
+}
+
+function validateToken(uint256 electionId, bytes32 token) public view returns (bool) {
+    TokenInfo memory t = tokens[electionId][token];
+    if (t.expiresAt == 0) return false;
+    if (t.used) return false;
+
+    // After election ended, token is no longer valid
+    if (electionConfigured[electionId] && block.timestamp >= votingEnd[electionId]) return false;
+
+    if (block.timestamp >= t.expiresAt) return false;
+    return true;
+}
 
     function voteWithToken(uint256 electionId, bytes32 token, uint256 candidateId)
         external

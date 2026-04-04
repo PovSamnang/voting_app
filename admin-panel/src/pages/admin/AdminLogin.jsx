@@ -2,8 +2,11 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import { useNavigate, Link, useLocation } from "react-router-dom";
 import "bootstrap/dist/css/bootstrap.min.css";
-
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
+import {
+  API_URL,
+  clearAdminSession,
+  saveAdminSession,
+} from "../../utils/adminAuth";
 
 export default function AdminLogin() {
   const nav = useNavigate();
@@ -12,24 +15,15 @@ export default function AdminLogin() {
   const [mode, setMode] = useState("login"); // "login" | "forgot" | "reset"
   const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(false);
-
-  // UI-only
   const [showPw, setShowPw] = useState(false);
 
-  useEffect(() => {
-    const token = localStorage.getItem("admin_token");
-    if (token) {
-      nav("/admin", { replace: true });
-    }
-  }, [nav]);
+  const [loginForm, setLoginForm] = useState({
+    username: "",
+    password: "",
+  });
 
-  // login
-  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
-
-  // forgot
   const [forgotEmail, setForgotEmail] = useState("");
 
-  // reset
   const [resetForm, setResetForm] = useState({
     email: "",
     resetId: "",
@@ -38,8 +32,15 @@ export default function AdminLogin() {
     confirm_password: "",
   });
 
+  useEffect(() => {
+    const token = localStorage.getItem("admin_token");
+    if (token) {
+      nav("/admin", { replace: true });
+    }
+  }, [nav]);
+
   const logout = () => {
-    localStorage.removeItem("admin_token");
+    clearAdminSession();
     setMsg({ type: "info", text: "Logged out." });
   };
 
@@ -47,28 +48,55 @@ export default function AdminLogin() {
     e.preventDefault();
     setMsg(null);
 
-    if (!loginForm.username.trim() || !loginForm.password) {
-      return setMsg({ type: "danger", text: "Please enter username/email and password." });
+    const username = String(loginForm.username || "").trim();
+    const password = String(loginForm.password || "");
+
+    if (!username || !password) {
+      setMsg({
+        type: "danger",
+        text: "Please enter username/email and password.",
+      });
+      return;
     }
 
     try {
       setLoading(true);
+
       const res = await axios.post(`${API_URL}/admin/login`, {
-        username: loginForm.username.trim(),
-        password: loginForm.password,
+        username,
+        password,
       });
 
       const token = res.data?.token;
-      if (!token) throw new Error("No token returned");
+      if (!token) {
+        throw new Error("No admin token returned from server");
+      }
 
-      localStorage.setItem("admin_token", token);
+      saveAdminSession({
+        token,
+        admin: res.data?.admin || null,
+      });
+
       setMsg({ type: "success", text: "Login success. Redirecting..." });
 
-      const goTo = location.state?.from || "/admin";
+      const from = location.state?.from;
+      const goTo =
+        typeof from === "string"
+          ? from
+          : from?.pathname
+          ? from.pathname
+          : "/admin";
+
       nav(goTo, { replace: true });
     } catch (err) {
-      const data = err?.response?.data;
-      setMsg({ type: "danger", text: data?.message || err.message || "Login failed" });
+      console.error("Admin login error:", err);
+      setMsg({
+        type: "danger",
+        text:
+          err?.response?.data?.message ||
+          err?.message ||
+          "Admin login failed.",
+      });
     } finally {
       setLoading(false);
     }
@@ -78,29 +106,45 @@ export default function AdminLogin() {
     e.preventDefault();
     setMsg(null);
 
-    const email = forgotEmail.trim().toLowerCase();
-    if (!email) return setMsg({ type: "danger", text: "Please enter your admin email." });
+    const email = String(forgotEmail || "").trim().toLowerCase();
+
+    if (!email) {
+      setMsg({ type: "danger", text: "Please enter your admin email." });
+      return;
+    }
 
     try {
       setLoading(true);
-      const res = await axios.post(`${API_URL}/admin/forgot-password`, { email });
 
-      const resetId = res.data?.resetId;
+      const res = await axios.post(`${API_URL}/admin/forgot-password`, {
+        email,
+      });
+
+      const resetId = res.data?.resetId || "";
 
       setMsg({
         type: "success",
-        text: res.data?.message || "If the account exists, a reset code was sent to your email.",
+        text:
+          res.data?.message ||
+          "If the account exists, a reset code was sent to your email.",
       });
 
-      setResetForm((p) => ({
-        ...p,
+      setResetForm((prev) => ({
+        ...prev,
         email,
-        resetId: resetId || p.resetId,
+        resetId: resetId || prev.resetId,
       }));
+
       setMode("reset");
     } catch (err) {
-      const data = err?.response?.data;
-      setMsg({ type: "danger", text: data?.message || err.message || "Request failed" });
+      console.error("Forgot password error:", err);
+      setMsg({
+        type: "danger",
+        text:
+          err?.response?.data?.message ||
+          err?.message ||
+          "Request failed.",
+      });
     } finally {
       setLoading(false);
     }
@@ -110,23 +154,33 @@ export default function AdminLogin() {
     e.preventDefault();
     setMsg(null);
 
-    const email = resetForm.email.trim().toLowerCase();
-    const resetId = resetForm.resetId.trim();
-    const otp = resetForm.otp.trim();
-    const new_password = resetForm.new_password;
+    const email = String(resetForm.email || "").trim().toLowerCase();
+    const resetId = String(resetForm.resetId || "").trim();
+    const otp = String(resetForm.otp || "").trim();
+    const new_password = String(resetForm.new_password || "");
+    const confirm_password = String(resetForm.confirm_password || "");
 
-    if (!email || !resetId || !otp || !new_password) {
-      return setMsg({ type: "danger", text: "Please fill all reset fields." });
+    if (!email || !resetId || !otp || !new_password || !confirm_password) {
+      setMsg({ type: "danger", text: "Please fill all reset fields." });
+      return;
     }
+
     if (new_password.length < 8) {
-      return setMsg({ type: "danger", text: "Password must be at least 8 characters." });
+      setMsg({
+        type: "danger",
+        text: "Password must be at least 8 characters.",
+      });
+      return;
     }
-    if (new_password !== resetForm.confirm_password) {
-      return setMsg({ type: "danger", text: "Passwords do not match." });
+
+    if (new_password !== confirm_password) {
+      setMsg({ type: "danger", text: "Passwords do not match." });
+      return;
     }
 
     try {
       setLoading(true);
+
       const res = await axios.post(`${API_URL}/admin/reset-password`, {
         email,
         resetId,
@@ -134,14 +188,26 @@ export default function AdminLogin() {
         new_password,
       });
 
-      setMsg({ type: "success", text: res.data?.message || "Password reset successful." });
+      setMsg({
+        type: "success",
+        text: res.data?.message || "Password reset successful.",
+      });
 
       setMode("login");
-      setLoginForm((p) => ({ ...p, username: email, password: "" }));
       setShowPw(false);
+      setLoginForm({
+        username: email,
+        password: "",
+      });
     } catch (err) {
-      const data = err?.response?.data;
-      setMsg({ type: "danger", text: data?.message || err.message || "Reset failed" });
+      console.error("Reset password error:", err);
+      setMsg({
+        type: "danger",
+        text:
+          err?.response?.data?.message ||
+          err?.message ||
+          "Reset failed.",
+      });
     } finally {
       setLoading(false);
     }
@@ -174,7 +240,6 @@ export default function AdminLogin() {
           color:#0f172a;
         }
 
-        /* bootstrap-proof */
         .nec-fullbleed a{ text-decoration:none !important; }
         .nec-fullbleed input, .nec-fullbleed button{ box-shadow:none !important; outline:none !important; }
         .nec-fullbleed input:focus{ box-shadow:none !important; }
@@ -185,7 +250,6 @@ export default function AdminLogin() {
           vertical-align:middle;
         }
 
-        /* ======= NAV BAR ONLY (header removed) ======= */
         .kh-nav{
           position: sticky;
           top:0;
@@ -237,7 +301,6 @@ export default function AdminLogin() {
         }
         .kh-adminBtn:hover{ color:#fff !important; border-color: rgba(255,255,255,0.35); }
 
-        /* ======= BODY ======= */
         .main{
           padding: 56px 16px 64px;
           display:flex;
@@ -460,18 +523,21 @@ export default function AdminLogin() {
         }
       `}</style>
 
-      {/* ✅ KEEP ONLY NAV BAR */}
       <div className="kh-nav">
         <div className="kh-nav-inner">
           <div className="kh-links">
-            <a className="kh-a" href="#">
+            <Link className="kh-a" to="/">
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
                 home
               </span>
               HOME
-            </a>
-            <a className="kh-a" href="#">VERIFY STATUS</a>
-            <a className="kh-a" href="#">POLLING STATIONS</a>
+            </Link>
+            <Link className="kh-a" to="/official-voter-search">
+              VERIFY STATUS
+            </Link>
+            <Link className="kh-a" to="/polling-stations">
+              POLLING STATIONS
+            </Link>
           </div>
 
           <Link className="kh-adminBtn" to="/">
@@ -483,7 +549,6 @@ export default function AdminLogin() {
         </div>
       </div>
 
-      {/* MAIN */}
       <main className="main">
         <div className="center">
           <div className="hero">
@@ -500,12 +565,23 @@ export default function AdminLogin() {
           <div className="card">
             <div className="cardHead">
               <div className="cardHeadTitle">
-                <span className="material-symbols-outlined">admin_panel_settings</span>
-                {mode === "login" ? "Admin Login" : mode === "forgot" ? "Forgot Password" : "Reset Password"}
+                <span className="material-symbols-outlined">
+                  admin_panel_settings
+                </span>
+                {mode === "login"
+                  ? "Admin Login"
+                  : mode === "forgot"
+                  ? "Forgot Password"
+                  : "Reset Password"}
               </div>
 
               {tokenExists ? (
-                <button className="logoutBtn" type="button" onClick={logout} disabled={loading}>
+                <button
+                  className="logoutBtn"
+                  type="button"
+                  onClick={logout}
+                  disabled={loading}
+                >
                   Logout
                 </button>
               ) : null}
@@ -519,7 +595,11 @@ export default function AdminLogin() {
               {msg && (
                 <div className={`alert ${msg.type}`}>
                   <span className="material-symbols-outlined">
-                    {msg.type === "success" ? "verified" : msg.type === "info" ? "info" : "error"}
+                    {msg.type === "success"
+                      ? "verified"
+                      : msg.type === "info"
+                      ? "info"
+                      : "error"}
                   </span>
                   <div className="alertText">{msg.text}</div>
                 </div>
@@ -528,14 +608,21 @@ export default function AdminLogin() {
               {mode === "login" && (
                 <form onSubmit={submitLogin}>
                   <div className="field">
-                    <label className="label">Username / ឈ្មោះអ្នកប្រើប្រាស់</label>
+                    <label className="label">
+                      Username / ឈ្មោះអ្នកប្រើប្រាស់
+                    </label>
                     <div className="inputWrap">
                       <span className="material-symbols-outlined icon">person</span>
                       <input
                         className="input"
                         value={loginForm.username}
-                        onChange={(e) => setLoginForm((p) => ({ ...p, username: e.target.value }))}
-                        placeholder="Enter your ID"
+                        onChange={(e) =>
+                          setLoginForm((prev) => ({
+                            ...prev,
+                            username: e.target.value,
+                          }))
+                        }
+                        placeholder="Enter username or email"
                         disabled={loading}
                       />
                     </div>
@@ -549,7 +636,12 @@ export default function AdminLogin() {
                         className="input"
                         type={showPw ? "text" : "password"}
                         value={loginForm.password}
-                        onChange={(e) => setLoginForm((p) => ({ ...p, password: e.target.value }))}
+                        onChange={(e) =>
+                          setLoginForm((prev) => ({
+                            ...prev,
+                            password: e.target.value,
+                          }))
+                        }
                         placeholder="••••••••"
                         disabled={loading}
                         style={{ paddingRight: 44 }}
@@ -561,7 +653,10 @@ export default function AdminLogin() {
                         disabled={loading}
                         aria-label="Toggle password visibility"
                       >
-                        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                        <span
+                          className="material-symbols-outlined"
+                          style={{ fontSize: 18 }}
+                        >
                           {showPw ? "visibility_off" : "visibility"}
                         </span>
                       </button>
@@ -589,13 +684,21 @@ export default function AdminLogin() {
 
                   <button className="submit" disabled={loading}>
                     <span>{loading ? "Signing in..." : "Sign In / ចូលប្រព័ន្ធ"}</span>
-                    <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: 18 }}
+                    >
                       login
                     </span>
                   </button>
 
-                  <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
-                    <span style={{ fontSize: 11, opacity: 0.9 }}>API: {API_URL}</span>
+                  <div
+                    className="row"
+                    style={{ marginTop: 12, justifyContent: "flex-end" }}
+                  >
+                    <span style={{ fontSize: 11, opacity: 0.9 }}>
+                      API: {API_URL}
+                    </span>
                   </div>
                 </form>
               )}
@@ -619,7 +722,10 @@ export default function AdminLogin() {
 
                   <button className="submit" disabled={loading}>
                     <span>{loading ? "Sending..." : "Send OTP Code"}</span>
-                    <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: 18 }}
+                    >
                       send
                     </span>
                   </button>
@@ -662,7 +768,12 @@ export default function AdminLogin() {
                         className="input"
                         type="email"
                         value={resetForm.email}
-                        onChange={(e) => setResetForm((p) => ({ ...p, email: e.target.value }))}
+                        onChange={(e) =>
+                          setResetForm((prev) => ({
+                            ...prev,
+                            email: e.target.value,
+                          }))
+                        }
                         placeholder="admin@example.com"
                         disabled={loading}
                       />
@@ -676,8 +787,13 @@ export default function AdminLogin() {
                       <input
                         className="input"
                         value={resetForm.resetId}
-                        onChange={(e) => setResetForm((p) => ({ ...p, resetId: e.target.value }))}
-                        placeholder="(from email)"
+                        onChange={(e) =>
+                          setResetForm((prev) => ({
+                            ...prev,
+                            resetId: e.target.value,
+                          }))
+                        }
+                        placeholder="from email"
                         disabled={loading}
                       />
                     </div>
@@ -690,7 +806,12 @@ export default function AdminLogin() {
                       <input
                         className="input"
                         value={resetForm.otp}
-                        onChange={(e) => setResetForm((p) => ({ ...p, otp: e.target.value }))}
+                        onChange={(e) =>
+                          setResetForm((prev) => ({
+                            ...prev,
+                            otp: e.target.value,
+                          }))
+                        }
                         placeholder="123456"
                         disabled={loading}
                       />
@@ -700,12 +821,19 @@ export default function AdminLogin() {
                   <div className="field">
                     <label className="label">New Password</label>
                     <div className="inputWrap">
-                      <span className="material-symbols-outlined icon">lock_reset</span>
+                      <span className="material-symbols-outlined icon">
+                        lock_reset
+                      </span>
                       <input
                         className="input"
                         type="password"
                         value={resetForm.new_password}
-                        onChange={(e) => setResetForm((p) => ({ ...p, new_password: e.target.value }))}
+                        onChange={(e) =>
+                          setResetForm((prev) => ({
+                            ...prev,
+                            new_password: e.target.value,
+                          }))
+                        }
                         placeholder="min 8 chars"
                         disabled={loading}
                       />
@@ -715,13 +843,18 @@ export default function AdminLogin() {
                   <div className="field">
                     <label className="label">Confirm New Password</label>
                     <div className="inputWrap">
-                      <span className="material-symbols-outlined icon">check_circle</span>
+                      <span className="material-symbols-outlined icon">
+                        check_circle
+                      </span>
                       <input
                         className="input"
                         type="password"
                         value={resetForm.confirm_password}
                         onChange={(e) =>
-                          setResetForm((p) => ({ ...p, confirm_password: e.target.value }))
+                          setResetForm((prev) => ({
+                            ...prev,
+                            confirm_password: e.target.value,
+                          }))
                         }
                         placeholder="repeat password"
                         disabled={loading}
@@ -731,7 +864,10 @@ export default function AdminLogin() {
 
                   <button className="submit" disabled={loading}>
                     <span>{loading ? "Resetting..." : "Reset Password"}</span>
-                    <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: 18 }}
+                    >
                       published_with_changes
                     </span>
                   </button>
@@ -754,18 +890,24 @@ export default function AdminLogin() {
             </div>
 
             <div className="cardFoot">
-              <span className="material-symbols-outlined" style={{ color: "var(--accent)" }}>
+              <span
+                className="material-symbols-outlined"
+                style={{ color: "var(--accent)" }}
+              >
                 verified_user
               </span>
               <p>
-                This is a secure government system. Unauthorized access is strictly prohibited and subject to legal action.
+                This is a secure government system. Unauthorized access is
+                strictly prohibited and subject to legal action.
               </p>
             </div>
           </div>
         </div>
       </main>
 
-      <div className="footer">© 2026 National Election Committee. All rights reserved.</div>
+      <div className="footer">
+        © 2026 National Election Committee. All rights reserved.
+      </div>
     </div>
   );
 }

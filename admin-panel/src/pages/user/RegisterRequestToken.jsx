@@ -1,11 +1,20 @@
-// src/RegisterRequestToken.jsx
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import axios from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
-import { Link } from "react-router-dom";
 import UserShell from "../../components/UserShell";
 
 const API_URL = "http://localhost:3000/api";
+
+function formatCountdown(sec) {
+  const s = Math.max(0, Number(sec || 0));
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+
+  if (days > 0) return `${days}d ${hours}h ${mins}m ${secs}s`;
+  return `${hours}h ${mins}m ${secs}s`;
+}
 
 export default function RegisterRequestToken() {
   const [f, setF] = useState({
@@ -21,31 +30,196 @@ export default function RegisterRequestToken() {
 
   const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [readingQr, setReadingQr] = useState(false);
 
-  const onChange = (e) => setF((p) => ({ ...p, [e.target.name]: e.target.value }));
+  const [votingStatus, setVotingStatus] = useState({
+    election_id: 0,
+    phase: "NONE",
+    phase_label_kh: "មិនទាន់បើកវគ្គ",
+    next_transition_ts: 0,
+    chain_now_ts: 0,
+  });
 
-  const onPickFile = (e) => {
+  const countdownToNext =
+    votingStatus.next_transition_ts && votingStatus.chain_now_ts
+      ? Math.max(0, votingStatus.next_transition_ts - votingStatus.chain_now_ts)
+      : 0;
+
+  const onChange = (e) =>
+    setF((p) => ({
+      ...p,
+      [e.target.name]: e.target.value,
+    }));
+
+  const loadVotingStatus = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/voting-status`);
+      const s = res.data || {};
+      setVotingStatus({
+        election_id: Number(s.election_id || 0),
+        phase: String(s.phase || "NONE").toUpperCase(),
+        phase_label_kh: String(s.phase_label_kh || ""),
+        next_transition_ts: Number(s.next_transition_ts || 0),
+        chain_now_ts: Number(s.chain_now_ts || 0),
+      });
+    } catch {
+      setVotingStatus({
+        election_id: 0,
+        phase: "NONE",
+        phase_label_kh: "មិនអាចទាញស្ថានភាពបាន",
+        next_transition_ts: 0,
+        chain_now_ts: 0,
+      });
+    }
+  };
+
+  useEffect(() => {
+    loadVotingStatus();
+    const t = setInterval(loadVotingStatus, 3000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (preview) URL.revokeObjectURL(preview);
+    };
+  }, [preview]);
+
+  const clearAutoFields = () => {
+    setF((p) => ({
+      ...p,
+      id_number: "",
+      name_kh: "",
+      name_en: "",
+    }));
+  };
+
+  const onPickFile = async (e) => {
     const picked = e.target.files?.[0] || null;
+
     setFile(picked);
+    setMsg(null);
 
     if (preview) URL.revokeObjectURL(preview);
     setPreview(picked ? URL.createObjectURL(picked) : null);
+
+    if (!picked) {
+      clearAutoFields();
+      return;
+    }
+
+    try {
+      setReadingQr(true);
+
+      const fd = new FormData();
+      fd.append("id_card_image", picked);
+
+      const res = await axios.post(
+        `${API_URL}/register-request-token/preview`,
+        fd,
+        {
+          headers: { "Content-Type": "multipart/form-data" },
+        }
+      );
+
+      const voter = res.data?.voter || {};
+
+      setF((p) => ({
+        ...p,
+        id_number: voter.id_number || "",
+        name_kh: voter.name_kh || "",
+        name_en: voter.name_en || "",
+      }));
+
+      setMsg({
+        type: "success",
+        text: "QR read successfully. ID information was filled automatically.",
+      });
+    } catch (err) {
+      const data = err?.response?.data;
+      clearAutoFields();
+      setMsg({
+        type: "danger",
+        text: data?.message || err.message || "Could not read QR from image.",
+      });
+    } finally {
+      setReadingQr(false);
+    }
+  };
+
+  const removeSelectedFile = () => {
+    setFile(null);
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(null);
+    clearAutoFields();
+    setMsg(null);
+
+    const input = document.getElementById("id-card-upload-input");
+    if (input) input.value = "";
   };
 
   const reset = () => {
-    setF({ id_number: "", name_kh: "", name_en: "", phone: "", email: "" });
+    setF({
+      id_number: "",
+      name_kh: "",
+      name_en: "",
+      phone: "",
+      email: "",
+    });
     setFile(null);
     if (preview) URL.revokeObjectURL(preview);
     setPreview(null);
     setMsg(null);
+
+    const input = document.getElementById("id-card-upload-input");
+    if (input) input.value = "";
   };
 
   const submit = async (e) => {
     e.preventDefault();
     setMsg(null);
 
+    if (votingStatus.phase !== "DRAFT") {
+      setMsg({
+        type: "danger",
+        text:
+          votingStatus.phase === "BEFORE_START"
+            ? `ការស្នើ token ត្រូវបានបិទ។ ${votingStatus.phase_label_kh} កំពុងដំណើរការ។`
+            : votingStatus.phase === "ACTIVE"
+            ? "ការស្នើ token ត្រូវបានបិទ។ ការបោះឆ្នោតកំពុងដំណើរការ។"
+            : votingStatus.phase === "ENDED"
+            ? "ការស្នើ token ត្រូវបានបិទ។ វគ្គបោះឆ្នោតបានបញ្ចប់។"
+            : "មិនទាន់បើកដំណាក់កាលចុះឈ្មោះទេ។",
+      });
+      return;
+    }
+
     if (!file) {
       setMsg({ type: "danger", text: "Please upload your ID card image." });
+      return;
+    }
+
+    if (readingQr) {
+      setMsg({
+        type: "danger",
+        text: "Please wait for QR reading to finish first.",
+      });
+      return;
+    }
+
+    if (!f.id_number || !f.name_kh || !f.name_en) {
+      setMsg({
+        type: "danger",
+        text: "Please upload a valid ID card image so the system can read your QR data first.",
+      });
+      return;
+    }
+
+    if (!f.phone.trim() || !f.email.trim()) {
+      setMsg({
+        type: "danger",
+        text: "Please enter phone number and email.",
+      });
       return;
     }
 
@@ -53,9 +227,6 @@ export default function RegisterRequestToken() {
       setLoading(true);
 
       const fd = new FormData();
-      fd.append("id_number", f.id_number.trim());
-      fd.append("name_kh", f.name_kh.trim());
-      fd.append("name_en", f.name_en.trim());
       fd.append("phone", f.phone.trim());
       fd.append("email", f.email.trim());
       fd.append("id_card_image", file);
@@ -108,7 +279,6 @@ export default function RegisterRequestToken() {
             --border:rgba(15,23,42,0.12);
           }
 
-          /* FULL WIDTH even if parent uses container */
           .nec-fullbleed{
             width: 100vw;
             margin-left: calc(50% - 50vw);
@@ -120,7 +290,6 @@ export default function RegisterRequestToken() {
             color: var(--slate);
           }
 
-          /* Bootstrap-proof reset (scope only this page) */
           .nec-fullbleed *, .nec-fullbleed *::before, .nec-fullbleed *::after{ box-sizing: border-box; }
           .nec-fullbleed a{ text-decoration: none !important; }
           .nec-fullbleed button, .nec-fullbleed input{
@@ -133,7 +302,6 @@ export default function RegisterRequestToken() {
 
           .khmer-motto{ font-family: "Kantumruy Pro", Inter, sans-serif; letter-spacing: 0.05em; }
 
-          /* Material Symbols (match HTML) */
           .material-symbols-outlined{
             font-variation-settings: 'FILL' 0, 'wght' 600, 'GRAD' 0, 'opsz' 24;
             line-height: 1;
@@ -142,84 +310,12 @@ export default function RegisterRequestToken() {
 
           .wrap{ max-width: 80rem; margin: 0 auto; padding: 0 24px; }
 
-          /* ===== Royal Header Section ===== */
-          .royalHeader{
-            background:#fff;
-            border-bottom: 4px solid var(--gold);
-            padding: 24px 0;
-          }
-          .royalRow{
-            display:flex; align-items:center; justify-content:space-between; gap: 24px;
-          }
-          .royalLeft{ display:flex; align-items:center; gap: 24px; min-width: 0; }
-          .coat{ width: 96px; height: 96px; display:flex; align-items:center; justify-content:center; }
-          .coat img{ width: 100%; height: 100%; object-fit: contain; }
-          .royalText{ color: var(--primary); min-width: 0; }
-          .royalText .kh1{ margin:0; font-weight: 700; font-size: 20px; line-height:1.1; }
-          .royalText .kh2{ margin:0; font-weight: 500; font-size: 18px; line-height:1.1; }
-          .royalText .line{ height:1px; width: 128px; background: var(--gold); margin: 6px 0; }
-          .royalText .en1{ font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .14em; }
-          .royalText .en2{ font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; opacity: .9; }
-
-          .royalRight{ display:none; align-items:flex-end; gap: 12px; }
-          .royalRight img{ height: 32px; border: 1px solid rgba(15,23,42,0.12); }
-          .necName{ text-align:right; }
-          .necName .enTitle{ font-size: 20px; font-weight: 900; color: var(--primary); text-transform: uppercase; }
-          .necName .khTitle{ font-size: 14px; font-weight: 700; color: #475569; }
-
-          @media (min-width: 1024px){
-            .royalRight{ display:flex; flex-direction:column; }
-          }
-
-          /* ===== Navigation Bar ===== */
-          .navBar{
-            position: sticky; top: 0; z-index: 50;
-            background: var(--primary) !important;
-            border-bottom: 1px solid rgba(226,232,240,0.35);
-            box-shadow: 0 8px 20px rgba(15,23,42,0.18);
-          }
-          .navInner{
-            display:flex; align-items:center; justify-content:space-between;
-            padding: 12px 0;
-            gap: 14px;
-          }
-          .navLinks{ display:flex; align-items:center; gap: 40px; flex-wrap: wrap; }
-          .navA{
-            display:flex; align-items:center; gap: 6px;
-            color: rgba(255,255,255,0.92) !important;
-            font-weight: 800;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: .08em;
-            padding: 6px 0;
-          }
-          .navA.muted{ color: rgba(226,232,240,0.92) !important; }
-          .navA:hover{ color: var(--gold) !important; }
-          .navRight{ display:flex; align-items:center; gap: 20px; }
-          .divider{ width:1px; height:16px; background: rgba(255,255,255,0.20); }
-
-          .adminBtn{
-            display:inline-flex; align-items:center; gap: 8px;
-            padding: 6px 16px;
-            border-radius: 4px;
-            border: 1px solid rgba(212,175,55,0.5);
-            color: var(--gold) !important;
-            font-weight: 800;
-            text-transform: uppercase;
-            font-size: 12px;
-            letter-spacing: .08em;
-            background: transparent;
-          }
-          .adminBtn:hover{ color:#fff !important; border-color: rgba(255,255,255,0.35); }
-
-          /* ===== Main background pattern ===== */
           .mainBg{
             background-image: url('https://www.transparenttextures.com/patterns/natural-paper.png');
             padding: 48px 0 64px;
           }
           .mainMax{ max-width: 56rem; margin: 0 auto; }
 
-          /* ===== Registration Header ===== */
           .regHeader{ text-align:center; margin-bottom: 48px; }
           .badgeCircle{
             width: 56px; height: 56px;
@@ -256,7 +352,6 @@ export default function RegisterRequestToken() {
             font-size: 14px;
           }
 
-          /* ===== Alerts ===== */
           .alertBox{
             display:flex; gap: 10px; align-items:flex-start;
             background:#fff;
@@ -271,7 +366,23 @@ export default function RegisterRequestToken() {
           .alertBox.danger .material-symbols-outlined{ color: var(--red); }
           .alertText{ font-weight: 700; font-size: 13px; color:#0f172a; line-height: 1.45; }
 
-          /* ===== Main Card ===== */
+          .phaseBox{
+            background:#fff;
+            border-left: 4px solid var(--gold);
+            padding: 14px 16px;
+            margin-bottom: 18px;
+            box-shadow: 0 6px 14px rgba(15,23,42,0.10);
+          }
+          .phaseTitle{
+            font-weight: 900;
+            color: var(--primary);
+            margin-bottom: 6px;
+          }
+          .phaseText{
+            color:#334155;
+            font-weight:700;
+          }
+
           .cardOuter{
             background:#fff;
             border-top: 4px solid var(--gold);
@@ -282,7 +393,6 @@ export default function RegisterRequestToken() {
             overflow:hidden;
           }
 
-          /* Progress header */
           .progressHead{
             background: #f8fafc;
             padding: 24px 40px;
@@ -328,15 +438,12 @@ export default function RegisterRequestToken() {
             transition: width .6s ease;
           }
 
-          /* Form padding */
           .formPad{ padding: 40px; }
           @media (max-width: 640px){
             .progressHead{ padding: 20px 20px; }
             .formPad{ padding: 22px; }
-            .navLinks{ gap: 18px; }
           }
 
-          /* Sections */
           .section{ margin-top: 0; }
           .sectionHead{
             border-bottom: 1px solid rgba(212,175,55,0.20);
@@ -414,6 +521,12 @@ export default function RegisterRequestToken() {
           .plIcon{ padding-left: 48px !important; }
           .plPhone{ padding-left: 64px !important; }
 
+          .readOnlyInput{
+            background: rgba(241,245,249,0.95) !important;
+            color: #334155 !important;
+            cursor: not-allowed;
+          }
+
           .help{
             margin-top: 10px;
             font-size: 12px;
@@ -422,7 +535,6 @@ export default function RegisterRequestToken() {
             font-style: italic;
           }
 
-          /* Upload box */
           .uploadBox{
             position: relative;
             border: 2px dashed rgba(203,213,225,1);
@@ -466,7 +578,6 @@ export default function RegisterRequestToken() {
           .uploadSub{ margin-top: 8px; color:#64748b; font-weight: 600; font-size: 14px; font-style: italic; }
           .uploadSmall{ margin-top: 4px; color:#94a3b8; font-weight: 600; font-size: 12px; }
 
-          /* Preview (kept your feature, styled to match) */
           .previewWrap{
             margin-top: 18px;
             background: #fff;
@@ -490,6 +601,8 @@ export default function RegisterRequestToken() {
             text-transform: uppercase;
           }
           .miniBtn:hover{ border-color: rgba(0,51,102,0.45); color: var(--primary); }
+          .miniBtn:disabled{ opacity:.7; cursor:not-allowed; }
+
           .imgArea{
             border: 1px dashed rgba(203,213,225,1);
             background: #fff;
@@ -503,7 +616,6 @@ export default function RegisterRequestToken() {
             object-fit: contain;
           }
 
-          /* Submit area */
           .submitBtn{
             width: 100%;
             display:flex;
@@ -524,7 +636,6 @@ export default function RegisterRequestToken() {
           .submitBtn:hover{ filter: brightness(1.02); }
           .submitBtn:disabled{ opacity: .7; cursor:not-allowed; }
 
-          /* Declaration */
           .decl{
             margin-top: 24px;
             display:flex;
@@ -551,7 +662,6 @@ export default function RegisterRequestToken() {
             font-weight: 600;
           }
 
-          /* Metadata footer */
           .meta{
             background: #f8fafc;
             border-top: 1px solid rgba(226,232,240,1);
@@ -595,7 +705,6 @@ export default function RegisterRequestToken() {
           }
           .metaLinks a:hover{ text-decoration: underline !important; }
 
-          /* Helpful cards */
           .infoGrid{
             margin-top: 48px;
             display:grid;
@@ -615,7 +724,6 @@ export default function RegisterRequestToken() {
             align-items:flex-start;
           }
           .infoCard.gold{ border-left-color: var(--gold); }
-          .infoIco{ font-size: 30px; }
           .infoCard .material-symbols-outlined{ font-size: 30px; }
           .infoCard h5{
             margin: 0;
@@ -632,72 +740,11 @@ export default function RegisterRequestToken() {
             color:#475569;
             line-height: 1.55;
           }
-
-          /* Global footer */
-          .footer{
-            background: var(--primary);
-            color:#fff;
-            padding: 48px 0;
-            margin-top: 0;
-          }
-          .footerGrid{
-            display:grid;
-            grid-template-columns: 1fr;
-            gap: 36px;
-            padding-bottom: 48px;
-            border-bottom: 1px solid rgba(255,255,255,0.10);
-          }
-          @media (min-width: 768px){
-            .footerGrid{ grid-template-columns: 1fr 1fr 1fr; gap: 48px; }
-          }
-          .footerBrand{ display:flex; align-items:center; gap: 12px; }
-          .footerBrand img{ height: 48px; filter: brightness(0) invert(1); }
-          .footer h4{
-            margin:0 0 10px 0;
-            color: var(--gold);
-            font-weight: 900;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: .12em;
-          }
-          .footer p, .footer a{
-            color: rgba(226,232,240,0.85) !important;
-            font-weight: 600;
-            font-size: 14px;
-          }
-          .footer a:hover{ color:#fff !important; }
-          .footerBottom{
-            padding-top: 20px;
-            display:flex;
-            flex-direction: column;
-            gap: 12px;
-            align-items:center;
-            justify-content:space-between;
-          }
-          @media (min-width: 768px){
-            .footerBottom{ flex-direction: row; }
-          }
-          .copy{
-            font-size: 12px;
-            font-weight: 900;
-            text-transform: uppercase;
-            letter-spacing: .12em;
-            color: rgba(148,163,184,0.95);
-            margin: 0;
-          }
         `}</style>
 
-        {/* Royal Header (matches HTML) */}
-        
-
-        {/* Nav (matches HTML) */}
-        
-
-        {/* Main */}
         <main className="mainBg">
           <div className="wrap">
             <div className="mainMax">
-              {/* Header */}
               <div className="regHeader">
                 <div className="badgeCircle">
                   <span className="material-symbols-outlined">how_to_reg</span>
@@ -708,7 +755,6 @@ export default function RegisterRequestToken() {
                 <p>Official secure portal for enrollment in upcoming national elections.</p>
               </div>
 
-              {/* Msg */}
               {msg && (
                 <div className={`alertBox ${msg.type === "success" ? "success" : "danger"}`}>
                   <span className="material-symbols-outlined">
@@ -718,32 +764,69 @@ export default function RegisterRequestToken() {
                 </div>
               )}
 
-              {/* Card */}
+              <div className="phaseBox">
+                <div className="phaseTitle">
+                  ស្ថានភាពបច្ចុប្បន្ន៖ {votingStatus.phase_label_kh || votingStatus.phase}
+                </div>
+
+                {votingStatus.phase === "DRAFT" && (
+                  <div className="phaseText">
+                    អ្នកអាចស្នើសុំ token បានក្នុងដំណាក់កាលនេះ។
+                  </div>
+                )}
+
+                {votingStatus.phase === "BEFORE_START" && (
+                  <div className="phaseText">
+                    មិនអាចស្នើ token បានទេ។ ការបោះឆ្នោតចាប់ផ្ដើមក្នុង{" "}
+                    <b>{formatCountdown(countdownToNext)}</b>
+                  </div>
+                )}
+
+                {votingStatus.phase === "ACTIVE" && (
+                  <div className="phaseText">
+                    ការស្នើ token ត្រូវបានបិទ។ ឥឡូវនេះអនុញ្ញាតតែបោះឆ្នោតប៉ុណ្ណោះ។
+                  </div>
+                )}
+
+                {votingStatus.phase === "ENDED" && (
+                  <div className="phaseText">វគ្គបោះឆ្នោតបានបញ្ចប់។</div>
+                )}
+
+                {votingStatus.phase === "NONE" && (
+                  <div className="phaseText">មិនទាន់បើកដំណាក់កាលចុះឈ្មោះទេ។</div>
+                )}
+              </div>
+
               <div className="cardOuter">
-                {/* Progress */}
                 <div className="progressHead">
                   <div className="progressTop">
                     <div className="stepLeft">
                       <div className="stepCircle">1</div>
                       <div className="stepText">Identity Verification (ជំហានទី ១)</div>
                     </div>
-                    <div className="progressPct">50% Complete</div>
+                    <div className="progressPct">
+                      {readingQr ? "Reading QR..." : "50% Complete"}
+                    </div>
                   </div>
                   <div className="bar">
-                    <div className="barFill" />
+                    <div
+                      className="barFill"
+                      style={{ width: readingQr ? "70%" : "50%" }}
+                    />
                   </div>
                 </div>
 
-                {/* FORM (same logic) */}
                 <form className="formPad" onSubmit={submit}>
-                  {/* Section 1 */}
                   <div className="section">
                     <div className="sectionHead">
                       <h3>
                         <span className="material-symbols-outlined">id_card</span>
                         អត្តសញ្ញាណប័ណ្ណផ្លូវការ / Official Identification
                       </h3>
-                      <p>Please provide details exactly as they appear on your National ID.</p>
+                      <p>
+                        ID number and names will be read automatically from your ID card QR.
+                        Please enter only phone and email.
+                      </p>
                     </div>
 
                     <div className="grid2">
@@ -754,12 +837,16 @@ export default function RegisterRequestToken() {
                             <span className="material-symbols-outlined">badge</span>
                           </span>
                           <input
-                            className="in plIcon"
+                            className="in plIcon readOnlyInput"
                             name="id_number"
                             value={f.id_number}
-                            onChange={onChange}
-                            placeholder="Enter your 9 or 12 digit ID number"
+                            placeholder={
+                              readingQr
+                                ? "Reading from QR..."
+                                : "Will be filled automatically from QR"
+                            }
                             type="text"
+                            readOnly
                             required
                           />
                         </div>
@@ -768,12 +855,16 @@ export default function RegisterRequestToken() {
                       <div className="field">
                         <label>Full Name in Khmer (ឈ្មោះពេញ ជាភាសាខ្មែរ)</label>
                         <input
-                          className="in khmer-motto"
+                          className="in khmer-motto readOnlyInput"
                           name="name_kh"
                           value={f.name_kh}
-                          onChange={onChange}
-                          placeholder="ឈ្មោះពេញ (ភាសាខ្មែរ)"
+                          placeholder={
+                            readingQr
+                              ? "កំពុងអានពី QR..."
+                              : "នឹងបំពេញដោយស្វ័យប្រវត្តិពី QR"
+                          }
                           type="text"
+                          readOnly
                           required
                         />
                       </div>
@@ -781,12 +872,16 @@ export default function RegisterRequestToken() {
                       <div className="field">
                         <label>Full Name in English (ឈ្មោះពេញ ជាអក្សរឡាតាំង)</label>
                         <input
-                          className="in"
+                          className="in readOnlyInput"
                           name="name_en"
                           value={f.name_en}
-                          onChange={onChange}
-                          placeholder="FULL NAME (LATIN)"
+                          placeholder={
+                            readingQr
+                              ? "Reading from QR..."
+                              : "Will be filled automatically from QR"
+                          }
                           type="text"
+                          readOnly
                           required
                           style={{ textTransform: "uppercase", fontWeight: 900 }}
                         />
@@ -794,7 +889,6 @@ export default function RegisterRequestToken() {
                     </div>
                   </div>
 
-                  {/* Section 2 */}
                   <div style={{ height: 40 }} />
 
                   <div className="section">
@@ -818,6 +912,7 @@ export default function RegisterRequestToken() {
                             placeholder="12 345 678"
                             type="tel"
                             required
+                            disabled={loading}
                           />
                         </div>
                       </div>
@@ -832,13 +927,13 @@ export default function RegisterRequestToken() {
                           placeholder="example@mail.com"
                           type="email"
                           required
+                          disabled={loading}
                         />
                         <div className="help">Token will be sent to this email.</div>
                       </div>
                     </div>
                   </div>
 
-                  {/* Section 3 */}
                   <div style={{ height: 40 }} />
 
                   <div className="section">
@@ -851,18 +946,26 @@ export default function RegisterRequestToken() {
 
                     <div className="uploadBox">
                       <input
+                        id="id-card-upload-input"
                         className="fileInput"
                         type="file"
                         accept="image/*"
                         onChange={onPickFile}
                         required
+                        disabled={loading || readingQr}
                       />
 
                       <div className="uploadInner">
                         <div className="uploadCircle">
-                          <span className="material-symbols-outlined">cloud_upload</span>
+                          <span className="material-symbols-outlined">
+                            {readingQr ? "qr_code_scanner" : "cloud_upload"}
+                          </span>
                         </div>
-                        <div className="uploadTitle">Click to upload or drag and drop</div>
+                        <div className="uploadTitle">
+                          {readingQr
+                            ? "Reading QR from uploaded image..."
+                            : "Click to upload or drag and drop"}
+                        </div>
                         <div className="uploadSub">
                           Please upload a clear photo of the FRONT of your National ID Card
                         </div>
@@ -876,7 +979,6 @@ export default function RegisterRequestToken() {
                       </div>
                     </div>
 
-                    {/* Preview (kept your feature) */}
                     <div className="previewWrap">
                       <div className="previewTop">
                         <strong>ID Card Preview</strong>
@@ -884,12 +986,8 @@ export default function RegisterRequestToken() {
                           <button
                             type="button"
                             className="miniBtn"
-                            onClick={() => {
-                              setFile(null);
-                              if (preview) URL.revokeObjectURL(preview);
-                              setPreview(null);
-                            }}
-                            disabled={loading}
+                            onClick={removeSelectedFile}
+                            disabled={loading || readingQr}
                           >
                             Remove
                           </button>
@@ -900,22 +998,32 @@ export default function RegisterRequestToken() {
                         {preview ? (
                           <img src={preview} alt="preview" />
                         ) : (
-                          <div style={{ color: "#64748b", fontWeight: 700 }}>No image selected.</div>
+                          <div style={{ color: "#64748b", fontWeight: 700 }}>
+                            No image selected.
+                          </div>
                         )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Submit Button */}
                   <div style={{ paddingTop: 40 }}>
-                    <button className="submitBtn" type="submit" disabled={loading}>
+                    <button
+                      className="submitBtn"
+                      type="submit"
+                      disabled={
+                        loading ||
+                        readingQr ||
+                        votingStatus.phase !== "DRAFT"
+                      }
+                    >
                       <span className="material-symbols-outlined">how_to_reg</span>
                       {loading
                         ? "PROCESSING..."
+                        : readingQr
+                        ? "READING QR..."
                         : "បញ្ជាក់ និងផ្ញើកូដផ្ទៀងផ្ទាត់ / CONFIRM & PROCEED"}
                     </button>
 
-                    {/* Declaration */}
                     <div className="decl">
                       <span className="material-symbols-outlined">gavel</span>
                       <p>
@@ -930,7 +1038,6 @@ export default function RegisterRequestToken() {
                   </div>
                 </form>
 
-                {/* Metadata footer */}
                 <div className="meta">
                   <div className="metaLeft">
                     <div className="secIcon">
@@ -951,13 +1058,16 @@ export default function RegisterRequestToken() {
                   </div>
 
                   <div className="metaLinks">
-                    <a href="#">SECURITY POLICY</a>
-                    <a href="#">USER TERMS</a>
+                    <a href="#" onClick={(e) => e.preventDefault()}>
+                      SECURITY POLICY
+                    </a>
+                    <a href="#" onClick={(e) => e.preventDefault()}>
+                      USER TERMS
+                    </a>
                   </div>
                 </div>
               </div>
 
-              {/* Helpful Info Grid */}
               <div className="infoGrid">
                 <div className="infoCard">
                   <span className="material-symbols-outlined" style={{ color: "var(--primary)" }}>
@@ -985,13 +1095,9 @@ export default function RegisterRequestToken() {
                   </div>
                 </div>
               </div>
-
             </div>
           </div>
         </main>
-
-        {/* Global Footer */}
-        
       </div>
     </UserShell>
   );

@@ -144,6 +144,107 @@ const upload = multer({
 // =========================
 // Helpers
 // =========================
+async function findVoterByDecodedQr(connection, decodedText) {
+  const qrValue = normalizeQrPayload(decodedText);
+
+  if (!qrValue) return null;
+
+  // 1) Try qr_token first
+  let [rows] = await connection.execute(
+    `SELECT uuid, id_number, name_kh, name_en, dob_iso, expiry_date, photo, qr_token
+     FROM voters
+     WHERE qr_token = ?
+     LIMIT 1`,
+    [qrValue]
+  );
+  if (rows.length) return rows[0];
+
+  // 2) If QR actually contains the ID number
+  const maybeId = canonicalId(qrValue);
+  [rows] = await connection.execute(
+    `SELECT uuid, id_number, name_kh, name_en, dob_iso, expiry_date, photo, qr_token
+     FROM voters
+     WHERE id_number = ?
+     LIMIT 1`,
+    [maybeId]
+  );
+  if (rows.length) return rows[0];
+
+  // 3) If QR is JSON-like and contains token/id fields, normalizeQrPayload already helps,
+  // so usually the two checks above are enough.
+
+  return null;
+}
+
+
+const PHASE_LABEL_KH = {
+  NONE: "មិនទាន់បើកវគ្គបោះឆ្នោត",
+  DRAFT: "ដំណាក់កាលចុះឈ្មោះ",
+  BEFORE_START: "ដំណាក់កាលត្រួតពិនិត្យ",
+  ACTIVE: "ដំណាក់កាលបោះឆ្នោត",
+  ENDED: "បញ្ចប់ការបោះ",
+};
+
+async function getWorkflowStatus(c = getTokenContract()) {
+  const eid = await getCurrentElectionId(c);
+
+  if (!eid) {
+    const nowTs = Math.floor(Date.now() / 1000);
+    return {
+      election_id: 0,
+      configured: false,
+      start_ts: 0,
+      end_ts: 0,
+      chain_now_ts: nowTs,
+      phase: "NONE",
+      phase_label_kh: PHASE_LABEL_KH.NONE,
+      next_transition_ts: 0,
+      countdown_seconds: 0,
+
+      allow_document_change: true,
+      allow_token_request: false,
+      allow_candidate_add: false,
+      allow_candidate_edit: false,
+      allow_vote: false,
+    };
+  }
+
+  const st = await getElectionState(c, eid);
+
+  let phase = "DRAFT";
+  let nextTransitionTs = 0;
+
+  if (!st.configured) {
+    phase = "DRAFT";
+  } else if (st.chainNow < st.start) {
+    phase = "BEFORE_START";
+    nextTransitionTs = st.start;
+  } else if (st.chainNow < st.end) {
+    phase = "ACTIVE";
+    nextTransitionTs = st.end;
+  } else {
+    phase = "ENDED";
+  }
+
+  return {
+    election_id: eid,
+    configured: st.configured,
+    start_ts: st.start,
+    end_ts: st.end,
+    chain_now_ts: st.chainNow,
+    phase,
+    phase_label_kh: PHASE_LABEL_KH[phase] || phase,
+    next_transition_ts: nextTransitionTs,
+    countdown_seconds:
+      nextTransitionTs > st.chainNow ? nextTransitionTs - st.chainNow : 0,
+
+    allow_document_change: phase === "NONE" || phase === "ENDED",
+    allow_token_request: phase === "DRAFT",
+    allow_candidate_add: phase === "DRAFT",
+    allow_candidate_edit: phase === "DRAFT" || phase === "BEFORE_START",
+    allow_vote: phase === "ACTIVE",
+  };
+}
 function addYearsToDDMMYYYY(ddmmyyyy, years = 10) {
   const s = String(ddmmyyyy || "").trim();
   const parts = s.split(".");
@@ -270,9 +371,29 @@ async function safeUnlinkPublicPath(publicPath) {
   } catch (_) {}
 }
 
+function normalizeDisplayDate(value) {
+  const s = String(value || "").trim();
+
+  if (!s) return "";
+
+  // dd.mm.yyyy or dd-mm-yyyy or dd/mm/yyyy
+  let m = s.match(/^(\d{2})[./-](\d{2})[./-](\d{4})$/);
+  if (m) return `${m[1]}.${m[2]}.${m[3]}`;
+
+  // yyyy-mm-dd
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return `${m[3]}.${m[2]}.${m[1]}`;
+
+  // yyyy-mm-dd hh:mm:ss
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T]/);
+  if (m) return `${m[3]}.${m[2]}.${m[1]}`;
+
+  return s;
+}
+
 async function verifyDocumentChangeForApproval(connection, requestRow) {
   const [rows] = await connection.execute(
-    `SELECT uuid, id_number, name_kh, name_en, gender, dob_iso, photo, issued_date, expiry_date
+    `SELECT uuid, id_number, name_kh, name_en, gender, dob_iso, dob_display, photo, issued_date, expiry_date
      FROM voters
      WHERE uuid = ?
      LIMIT 1`,
@@ -285,17 +406,27 @@ async function verifyDocumentChangeForApproval(connection, requestRow) {
 
   const oldVoter = rows[0];
 
-  const oldDobIso = oldVoter.dob_iso
-    ? new Date(oldVoter.dob_iso).toISOString().slice(0, 10)
-    : "";
+  const oldDobDisplay = normalizeDisplayDate(
+    oldVoter.dob_display || oldVoter.dob_iso
+  );
 
-  const requestedDobIso = requestRow.requested_dob_iso
-    ? new Date(requestRow.requested_dob_iso).toISOString().slice(0, 10)
-    : "";
+  const requestedDobDisplay = normalizeDisplayDate(
+    requestRow.requested_dob_display || requestRow.requested_dob_iso
+  );
 
-  const dobMatch = oldDobIso && requestedDobIso && oldDobIso === requestedDobIso;
+  const dobMatch = Boolean(
+    oldDobDisplay &&
+    requestedDobDisplay &&
+    oldDobDisplay === requestedDobDisplay
+  );
+
+  console.log("old dob =", oldDobDisplay);
+  console.log("requested dob =", requestedDobDisplay);
+  console.log("dobMatch =", dobMatch);
+
   const genderMatch =
-    normalizeGenderKh(oldVoter.gender) === normalizeGenderKh(requestRow.requested_gender);
+    normalizeGenderKh(oldVoter.gender) ===
+    normalizeGenderKh(requestRow.requested_gender);
 
   const nameMatch = samePersonByName(
     { name_kh: oldVoter.name_kh, name_en: oldVoter.name_en },
@@ -330,6 +461,8 @@ async function verifyDocumentChangeForApproval(connection, requestRow) {
     oldVoter,
     checks: {
       dobMatch,
+      oldDobDisplay,
+      requestedDobDisplay,
       genderMatch,
       nameMatch,
       faceMatch,
@@ -699,28 +832,37 @@ async function fetchCandidatesForElection(c, electionId) {
   return out;
 }
 
+const UINT64_MAX = (1n << 64n) - 1n;
+
 async function issueTokenForElection(electionId) {
   const c = getTokenContract();
   const tx = await c.issueToken(electionId, TOKEN_TTL_SECONDS);
   const receipt = await tx.wait();
 
   let tokenHex = null;
-  let expiresAt = 0;
+  let expiresAt = null;
+  let noExpiry = false;
 
   for (const log of receipt.logs) {
     try {
       if (String(log.address).toLowerCase() !== String(CONTRACT_ADDRESS).toLowerCase()) continue;
+
       const parsed = c.interface.parseLog(log);
       if (parsed?.name === "TokenIssued") {
         tokenHex = parsed.args.token;
-        expiresAt = Number(parsed.args.expiresAt);
+
+        const rawExp = BigInt(parsed.args.expiresAt);
+        noExpiry = rawExp === UINT64_MAX;
+        expiresAt = noExpiry ? null : Number(rawExp);
+
         break;
       }
     } catch {}
   }
 
   if (!tokenHex) throw new Error("Could not parse TokenIssued event");
-  return { tokenHex, expiresAt, txHash: receipt.hash };
+
+  return { tokenHex, expiresAt, noExpiry, txHash: receipt.hash };
 }
 
 // =========================
@@ -859,7 +1001,7 @@ app.post("/api/login", async (req, res) => {
 });
 
 // ADMIN: Get voters (+ contacts)
-app.get("/api/voters", async (_req, res) => {
+app.get("/api/voters", adminRequired, async (_req, res) => {
   try {
     const connection = await mysql.createConnection(DB_CONFIG);
     const [rows] = await connection.execute(
@@ -879,8 +1021,7 @@ app.get("/api/voters", async (_req, res) => {
   }
 });
 
-// ADMIN: Update voter
-app.put("/api/voters/:uuid", async (req, res) => {
+app.put("/api/voters/:uuid", adminRequired, async (req, res) => {
   const { uuid } = req.params;
   const { id_number, name_en, name_kh, gender } = req.body;
 
@@ -897,22 +1038,6 @@ app.put("/api/voters/:uuid", async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Update failed", error: err.message });
-  }
-});
-
-// =========================
-// ADMIN FLOW (unchanged)
-// =========================
-app.post("/api/admin/elections/draft", adminRequired, async (_req, res) => {
-  try {
-    const c = getTokenContract();
-    const tx = await c.createDraftElection();
-    await tx.wait();
-
-    const eid = await getCurrentElectionId(c);
-    return res.json({ message: "Draft election created", election_id: eid, tx_hash: tx.hash });
-  } catch (e) {
-    return res.status(500).json({ message: "Create draft failed", error: extractEthersError(e) });
   }
 });
 
@@ -984,11 +1109,20 @@ app.post("/api/admin/candidates", adminRequired, async (req, res) => {
     if (!name_en?.trim()) return res.status(400).json({ message: "name_en is required" });
 
     const c = getTokenContract();
-    const eid = await getCurrentElectionId(c);
-    if (!eid) return res.status(400).json({ message: "Create draft election first" });
+const wf = await getWorkflowStatus(c);
+const eid = wf.election_id;
 
-    const st = await getElectionState(c, eid);
-    if (st.configured && st.started) return res.status(403).json({ message: "Cannot add candidate after period start" });
+if (!eid) {
+  return res.status(400).json({ message: "Create draft election first" });
+}
+
+if (!wf.allow_candidate_add) {
+  return res.status(403).json({
+    message: `Candidate can be added only during ${PHASE_LABEL_KH.DRAFT}`,
+    phase: wf.phase,
+    phase_label_kh: wf.phase_label_kh,
+  });
+}
 
     const tx = await c.addCandidate(
       eid,
@@ -1005,163 +1139,254 @@ app.post("/api/admin/candidates", adminRequired, async (req, res) => {
   }
 });
 
+app.post(
+  "/api/register-request-token/preview",
+  upload.single("id_card_image"),
+  async (req, res) => {
+    let connection;
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "Missing ID card image" });
+      }
+
+      connection = await mysql.createConnection(DB_CONFIG);
+
+      const decoded = await decodeQrFromImageFile(req.file.path);
+      if (!decoded) {
+        await safeUnlink(req.file.path);
+        return res.status(400).json({
+          message: "QR not detected. Upload a clearer ID card photo with QR visible.",
+        });
+      }
+
+      const voter = await findVoterByDecodedQr(connection, decoded);
+      if (!voter) {
+        await safeUnlink(req.file.path);
+        return res.status(404).json({
+          message: "QR is not registered in voter database",
+        });
+      }
+
+      // Optional safety checks here too
+      const exp = parseDDMMYYYY(voter.expiry_date);
+      if (exp && exp.getTime() < Date.now()) {
+        await safeUnlink(req.file.path);
+        return res.status(403).json({ message: "ID card expired" });
+      }
+
+      if (voter.dob_iso) {
+        const age = calcAge(new Date(voter.dob_iso));
+        if (age < 18) {
+          await safeUnlink(req.file.path);
+          return res.status(403).json({ message: "Under 18" });
+        }
+      }
+
+      await safeUnlink(req.file.path);
+
+      return res.json({
+        message: "QR read successfully",
+        voter: {
+          uuid: voter.uuid,
+          id_number: voter.id_number,
+          name_kh: voter.name_kh || "",
+          name_en: voter.name_en || "",
+        },
+      });
+    } catch (err) {
+      console.error("preview register-request-token error:", err);
+      await safeUnlink(req.file?.path);
+      return res.status(500).json({
+        message: "Preview failed",
+        error: err.message,
+      });
+    } finally {
+      try {
+        if (connection) await connection.end();
+      } catch {}
+    }
+  }
+);
+
 // ✅ voter request token
 app.post("/api/register-request-token", upload.single("id_card_image"), async (req, res) => {
   let connection;
   try {
-    const { id_number, name_kh, name_en, phone, email } = req.body;
+    const { phone, email } = req.body;
 
-    if (!id_number || !name_kh || !name_en || !phone || !email || !req.file) {
+    if (!phone || !email || !req.file) {
       await safeUnlink(req.file?.path);
-      return res.status(400).json({ message: "Missing fields or ID card image" });
+      return res.status(400).json({ message: "Missing phone, email, or ID card image" });
     }
 
-    const id = canonicalId(id_number);
     const cleanEmail = String(email).trim().toLowerCase();
     const cleanPhone = String(phone).trim();
 
     connection = await mysql.createConnection(DB_CONFIG);
 
-    const [rows] = await connection.execute(
-      `SELECT uuid, id_number, name_kh, name_en, dob_iso, expiry_date, photo, qr_token
-       FROM voters WHERE id_number=? LIMIT 1`,
-      [id]
-    );
-
-    if (rows.length === 0) {
-      await safeUnlink(req.file.path);
-      return res.status(404).json({ message: "ID not found" });
-    }
-
-    const voter = rows[0];
-
-    // 1) Name must match DB
-    const inEn = normalizeName(name_en);
-    const inKh = normalizeName(name_kh);
-    const dbEn = normalizeName(voter.name_en);
-    const dbKh = normalizeName(voter.name_kh);
-    if ((dbEn && inEn !== dbEn) || (dbKh && inKh !== dbKh)) {
-      await safeUnlink(req.file.path);
-      return res.status(403).json({ message: "Name does not match voter database" });
-    }
-
-    // 2) Expiry check
-    const exp = parseDDMMYYYY(voter.expiry_date);
-    if (exp && exp.getTime() < Date.now()) {
-      await safeUnlink(req.file.path);
-      return res.status(403).json({ message: "ID card expired" });
-    }
-
-    // 3) Age >= 18
-    if (voter.dob_iso) {
-      const age = calcAge(new Date(voter.dob_iso));
-      if (age < 18) {
-        await safeUnlink(req.file.path);
-        return res.status(403).json({ message: "Under 18" });
-      }
-    }
-
-    // 4) Email unique across voters
-    const [emailUsed] = await connection.execute(
-      `SELECT voter_uuid FROM voter_contacts WHERE email=? LIMIT 1`,
-      [cleanEmail]
-    );
-    if (emailUsed.length && String(emailUsed[0].voter_uuid) !== String(voter.uuid)) {
-      await safeUnlink(req.file.path);
-      return res.status(409).json({ message: "Email already used by another voter" });
-    }
-
-    // 5) QR compare
+    // 1) Decode QR from uploaded image
     if (REQUIRE_QR_ON_IDCARD) {
       const decoded = await decodeQrFromImageFile(req.file.path);
       if (!decoded) {
         await safeUnlink(req.file.path);
-        return res.status(400).json({ message: "QR not detected. Upload a clearer ID card photo with QR visible." });
+        return res.status(400).json({
+          message: "QR not detected. Upload a clearer ID card photo with QR visible.",
+        });
       }
 
-      const qrToken = normalizeQrPayload(decoded);
-      if (!qrToken) {
-        await safeUnlink(req.file.path);
-        return res.status(400).json({ message: "QR content invalid. Please re-upload a clearer photo." });
-      }
-
-      const [qrOwner] = await connection.execute(
-        `SELECT uuid, id_number FROM voters WHERE qr_token=? LIMIT 1`,
-        [qrToken]
-      );
-
-      if (qrOwner.length === 0) {
+      const voterFromQr = await findVoterByDecodedQr(connection, decoded);
+      if (!voterFromQr) {
         await safeUnlink(req.file.path);
         return res.status(403).json({ message: "QR is not registered in voter database" });
       }
 
-      if (String(qrOwner[0].uuid) !== String(voter.uuid)) {
+      const voter = voterFromQr;
+      const id = canonicalId(voter.id_number);
+
+      // 2) Expiry check
+      const exp = parseDDMMYYYY(voter.expiry_date);
+      if (exp && exp.getTime() < Date.now()) {
         await safeUnlink(req.file.path);
-        return res.status(403).json({
-          message: "Uploaded ID card does not match entered ID number (QR mismatch)",
-          reason: QR_DEBUG ? `QR belongs to: ${qrOwner[0].id_number}` : undefined,
+        return res.status(403).json({ message: "ID card expired" });
+      }
+
+      // 3) Age >= 18
+      if (voter.dob_iso) {
+        const age = calcAge(new Date(voter.dob_iso));
+        if (age < 18) {
+          await safeUnlink(req.file.path);
+          return res.status(403).json({ message: "Under 18" });
+        }
+      }
+
+      // 4) Email unique across voters
+      const [emailUsed] = await connection.execute(
+        `SELECT voter_uuid FROM voter_contacts WHERE email=? LIMIT 1`,
+        [cleanEmail]
+      );
+      if (emailUsed.length && String(emailUsed[0].voter_uuid) !== String(voter.uuid)) {
+        await safeUnlink(req.file.path);
+        return res.status(409).json({ message: "Email already used by another voter" });
+      }
+
+      // 5) Make sure DB voter really has qr_token if your system requires it
+      if (!voter.qr_token) {
+        await safeUnlink(req.file.path);
+        return res.status(500).json({
+          message: "Voter record missing qr_token. Admin must enroll QR token first.",
         });
       }
 
-      if (!voter.qr_token) {
+      // Election gate
+      const c = getTokenContract();
+      const wf = await getWorkflowStatus(c);
+
+      if (!wf.election_id) {
         await safeUnlink(req.file.path);
-        return res.status(500).json({ message: "Voter record missing qr_token. Admin must enroll QR token first." });
+        return res.status(403).json({
+          message: "មិនទាន់មានវគ្គបោះឆ្នោតសម្រាប់ចុះឈ្មោះទេ",
+        });
       }
+
+      if (!wf.allow_token_request) {
+        await safeUnlink(req.file.path);
+        return res.status(403).json({
+          message: `ការស្នើសុំ token អនុញ្ញាតតែក្នុង ${PHASE_LABEL_KH.DRAFT} ប៉ុណ្ណោះ`,
+          phase: wf.phase,
+          phase_label_kh: wf.phase_label_kh,
+          next_transition_ts: wf.next_transition_ts,
+        });
+      }
+
+      const eid = wf.election_id;
+
+      const [stDb] = await connection.execute(
+        `SELECT voted_at FROM voter_election WHERE voter_uuid=? AND election_id=? LIMIT 1`,
+        [voter.uuid, eid]
+      );
+      if (stDb.length > 0 && stDb[0].voted_at) {
+        await safeUnlink(req.file.path);
+        return res.status(403).json({ message: "Already voted in this election" });
+      }
+
+      const issued = await issueTokenForElection(eid);
+      const tokenHash = sha256Hex(String(issued.tokenHex).trim().toLowerCase());
+      const tokenLast4 = String(issued.tokenHex).trim().slice(-4);
+
+      const mins =
+        issued.noExpiry || !issued.expiresAt
+          ? null
+          : Math.max(0, Math.ceil((issued.expiresAt - Math.floor(Date.now() / 1000)) / 60));
+
+      await connection.execute(
+        `INSERT INTO voter_election (
+           voter_uuid,
+           election_id,
+           registered_at,
+           token_issued_at,
+           token_sent_at,
+           token_expires_at,
+           token_hash,
+           token_last4
+         )
+         VALUES (?, ?, NOW(), NOW(), NOW(), ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           token_issued_at = NOW(),
+           token_sent_at = NOW(),
+           token_expires_at = VALUES(token_expires_at),
+           token_hash = VALUES(token_hash),
+           token_last4 = VALUES(token_last4)`,
+        [
+          voter.uuid,
+          eid,
+          issued.noExpiry ? null : issued.expiresAt,
+          tokenHash,
+          tokenLast4,
+        ]
+      );
+
+      await connection.execute(
+        `INSERT INTO voter_contacts (voter_uuid, phone, email)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           phone=VALUES(phone),
+           email=VALUES(email),
+           updated_at=CURRENT_TIMESTAMP`,
+        [voter.uuid, cleanPhone, cleanEmail]
+      );
+
+      await sendEmail(
+        cleanEmail,
+        "KampuVote Voting Token",
+        `Your voting token (blockchain):\n\n` +
+          `Election ID: ${eid}\n` +
+          `ID: ${id}\n` +
+          `Name KH: ${voter.name_kh || ""}\n` +
+          `Name EN: ${voter.name_en || ""}\n` +
+          `TOKEN: ${issued.tokenHex}\n\n` +
+          (
+            issued.noExpiry
+              ? `This token was issued during registration stage and remains usable while the election is active.\n`
+              : `Expires in ~${mins} minutes.\n`
+          )
+      );
+
+      await safeUnlink(req.file.path);
+
+      return res.json({
+        message: "Token sent to email.",
+        election_id: eid,
+        expires_at: issued.expiresAt,
+        voter: {
+          id_number: voter.id_number,
+          name_kh: voter.name_kh || "",
+          name_en: voter.name_en || "",
+        },
+      });
     }
 
-    // Election gate
-    const c = getTokenContract();
-    const eid = await getCurrentElectionId(c);
-    if (!eid) return res.status(403).json({ message: "No draft election. Admin must create draft first." });
-
-    const st = await getElectionState(c, eid);
-    if (st.configured && st.started) return res.status(403).json({ message: "Token request closed (period started)" });
-    if (st.configured && st.ended) return res.status(403).json({ message: "Election ended" });
-
-    const [stDb] = await connection.execute(
-      `SELECT voted_at FROM voter_election WHERE voter_uuid=? AND election_id=? LIMIT 1`,
-      [voter.uuid, eid]
-    );
-    if (stDb.length > 0 && stDb[0].voted_at) {
-      return res.status(403).json({ message: "Already voted in this election" });
-    }
-
-    // Issue token on-chain
-    const issued = await issueTokenForElection(eid);
-    const remainSec = issued.expiresAt - Math.floor(Date.now() / 1000);
-    const mins = Math.max(0, Math.ceil(remainSec / 60));
-
-    await connection.execute(
-      `INSERT INTO voter_election (voter_uuid, election_id, registered_at, token_issued_at, token_sent_at, token_expires_at)
-       VALUES (?, ?, NOW(), NOW(), NOW(), ?)
-       ON DUPLICATE KEY UPDATE
-         token_issued_at=NOW(),
-         token_sent_at=NOW(),
-         token_expires_at=VALUES(token_expires_at)`,
-      [voter.uuid, eid, issued.expiresAt]
-    );
-
-    await connection.execute(
-      `INSERT INTO voter_contacts (voter_uuid, phone, email)
-       VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         phone=VALUES(phone),
-         email=VALUES(email),
-         updated_at=CURRENT_TIMESTAMP`,
-      [voter.uuid, cleanPhone, cleanEmail]
-    );
-
-    await sendEmail(
-      cleanEmail,
-      "KampuVote Voting Token",
-      `Your voting token (blockchain):\n\n` +
-        `Election ID: ${eid}\n` +
-        `ID: ${id}\n` +
-        `TOKEN: ${issued.tokenHex}\n\n` +
-        `Expires in ~${mins} minutes.\n`
-    );
-
-    return res.json({ message: "Token sent to email.", election_id: eid, expires_at: issued.expiresAt });
+    await safeUnlink(req.file.path);
+    return res.status(400).json({ message: "QR is required on ID card" });
   } catch (err) {
     console.error(err);
     await safeUnlink(req.file?.path);
@@ -1190,27 +1415,40 @@ app.post("/api/vote", authRequired, async (req, res) => {
   let connection;
   try {
     const { token, candidate_id } = req.body;
-    if (!token || !candidate_id) return res.status(400).json({ message: "Missing token or candidate_id" });
+    if (!token || !candidate_id) {
+      return res.status(400).json({ message: "Missing token or candidate_id" });
+    }
 
     const voter_uuid = String(req.user?.uuid || "");
-    if (!voter_uuid) return res.status(401).json({ message: "Invalid session" });
+    if (!voter_uuid) {
+      return res.status(401).json({ message: "Invalid session" });
+    }
 
     const c = getTokenContract();
     const eid = await getCurrentElectionId(c);
     if (!eid) return res.status(403).json({ message: "No election configured" });
 
     const st = await getElectionState(c, eid);
-    if (!st.configured) return res.status(403).json({ message: "Election not configured yet" });
+    if (!st.configured) {
+      return res.status(403).json({ message: "Election not configured yet" });
+    }
     if (!(st.chainNow >= st.start && st.chainNow < st.end)) {
       return res.status(403).json({ message: "Voting not active" });
     }
+
+    const tokenHex = String(token).trim();
+    const tokenHash = sha256Hex(tokenHex.toLowerCase());
+    const candidateId = Number(candidate_id);
 
     connection = await mysql.createConnection(DB_CONFIG);
     await connection.beginTransaction();
 
     const [stDb] = await connection.execute(
-      `SELECT voted_at FROM voter_election
-       WHERE voter_uuid=? AND election_id=? LIMIT 1 FOR UPDATE`,
+      `SELECT voted_at, token_hash
+       FROM voter_election
+       WHERE voter_uuid = ? AND election_id = ?
+       LIMIT 1
+       FOR UPDATE`,
       [voter_uuid, eid]
     );
 
@@ -1218,25 +1456,41 @@ app.post("/api/vote", authRequired, async (req, res) => {
       await connection.rollback();
       return res.status(403).json({ message: "You must request token first" });
     }
+
     if (stDb[0].voted_at) {
       await connection.rollback();
       return res.status(403).json({ message: "Already voted in this election" });
     }
 
-    const tokenHex = String(token).trim();
-    const candidateId = Number(candidate_id);
+    if (!stDb[0].token_hash) {
+      await connection.rollback();
+      return res.status(403).json({ message: "No token is linked to this account" });
+    }
+
+    if (String(stDb[0].token_hash) !== tokenHash) {
+      await connection.rollback();
+      return res.status(403).json({ message: "This token does not belong to your account" });
+    }
 
     const tx = await c.voteWithToken(eid, tokenHex, candidateId);
     await tx.wait();
 
     await connection.execute(
-      `UPDATE voter_election SET voted_at=NOW()
-       WHERE voter_uuid=? AND election_id=?`,
+      `UPDATE voter_election
+       SET voted_at = NOW(),
+           token_hash = NULL,
+           token_last4 = NULL
+       WHERE voter_uuid = ? AND election_id = ?`,
       [voter_uuid, eid]
     );
 
     await connection.commit();
-    return res.json({ message: "Vote successful", election_id: eid, tx_hash: tx.hash });
+
+    return res.json({
+      message: "Vote successful",
+      election_id: eid,
+      tx_hash: tx.hash
+    });
   } catch (e) {
     try { if (connection) await connection.rollback(); } catch {}
     const msg = extractEthersError(e);
@@ -1248,14 +1502,57 @@ app.post("/api/vote", authRequired, async (req, res) => {
 
 // Verify token
 app.post("/api/verify-voting-token", authRequired, async (req, res) => {
+  let connection;
   try {
     const { token } = req.body;
     if (!token) return res.status(400).json({ message: "Missing token" });
 
-    const tokenHex = String(token).trim();
+    const voter_uuid = String(req.user?.uuid || "");
+    if (!voter_uuid) return res.status(401).json({ message: "Invalid session" });
+
     const c = getTokenContract();
+    const wf = await getWorkflowStatus(c);
+
+    if (wf.phase !== "ACTIVE") {
+      return res.status(403).json({
+        message: `Token cannot be used in ${wf.phase_label_kh}`,
+        phase: wf.phase,
+        phase_label_kh: wf.phase_label_kh,
+        next_transition_ts: wf.next_transition_ts,
+      });
+    }
+
+    const tokenHex = String(token).trim();
+    const tokenHash = sha256Hex(tokenHex.toLowerCase());
+
     const eid = await getCurrentElectionId(c);
     if (!eid) return res.status(403).json({ message: "No election configured" });
+
+    connection = await mysql.createConnection(DB_CONFIG);
+
+    const [rows] = await connection.execute(
+      `SELECT token_hash, voted_at
+       FROM voter_election
+       WHERE voter_uuid = ? AND election_id = ?
+       LIMIT 1`,
+      [voter_uuid, eid]
+    );
+
+    if (!rows.length) {
+      return res.status(403).json({ message: "You must request token first" });
+    }
+
+    if (!rows[0].token_hash) {
+      return res.status(403).json({ message: "No token is linked to this account" });
+    }
+
+    if (String(rows[0].token_hash) !== tokenHash) {
+      return res.status(403).json({ message: "This token does not belong to your account" });
+    }
+
+    if (rows[0].voted_at) {
+      return res.status(403).json({ message: "Already voted in this election" });
+    }
 
     const ok = await c.validateToken(eid, tokenHex);
     if (!ok) return res.status(401).json({ message: "Invalid/expired/used token" });
@@ -1264,19 +1561,39 @@ app.post("/api/verify-voting-token", authRequired, async (req, res) => {
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Server error", error: err.message });
+  } finally {
+    try { if (connection) await connection.end(); } catch {}
   }
 });
 
 // Debug token
 app.post("/api/debug-token", authRequired, async (req, res) => {
+  let connection;
   try {
     const { token } = req.body;
     if (!token) return res.status(400).json({ message: "Missing token" });
 
+    const voter_uuid = String(req.user?.uuid || "");
+    if (!voter_uuid) return res.status(401).json({ message: "Invalid session" });
+
     const tokenHex = String(token).trim();
+    const tokenHash = sha256Hex(tokenHex.toLowerCase());
+
     const c = getTokenContract();
     const eid = await getCurrentElectionId(c);
     if (!eid) return res.status(403).json({ message: "No election configured" });
+
+    connection = await mysql.createConnection(DB_CONFIG);
+
+    const [rows] = await connection.execute(
+      `SELECT token_hash, voted_at
+       FROM voter_election
+       WHERE voter_uuid = ? AND election_id = ?
+       LIMIT 1`,
+      [voter_uuid, eid]
+    );
+
+    const dbMatches = !!rows.length && String(rows[0].token_hash || "") === tokenHash;
 
     const info = await c.tokens(eid, tokenHex);
     const expiresAt = Number(info?.expiresAt ?? info?.[0] ?? 0);
@@ -1285,10 +1602,21 @@ app.post("/api/debug-token", authRequired, async (req, res) => {
     const ok = await c.validateToken(eid, tokenHex);
     const st = await getElectionState(c, eid);
 
-    return res.json({ election_id: eid, token: tokenHex, expiresAt, used, chainNow: st.chainNow, validateToken: ok });
+    return res.json({
+      election_id: eid,
+      token: tokenHex,
+      expiresAt,
+      used,
+      chainNow: st.chainNow,
+      validateToken: ok,
+      belongs_to_logged_in_user: dbMatches,
+      already_voted: Boolean(rows?.[0]?.voted_at),
+    });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ message: "debug-token failed", error: String(e.message || e) });
+  } finally {
+    try { if (connection) await connection.end(); } catch {}
   }
 });
 
@@ -1706,15 +2034,41 @@ app.get("/api/voting-status", async (_req, res) => {
   try {
     const c = getTokenContract();
     const eid = Number(await c.currentElectionId());
-    if (!eid) return res.json({ election_id: 0, configured: false, phase: "NONE" });
+
+    if (!eid) {
+      return res.json({
+        election_id: 0,
+        configured: false,
+        start_ts: 0,
+        end_ts: 0,
+        chain_now_ts: Math.floor(Date.now() / 1000),
+        next_transition_ts: 0,
+        phase: "NONE",
+        phase_label_kh: "មិនទាន់បើកវគ្គ",
+        active_chain: false,
+      });
+    }
 
     const st = await getElectionState(c, eid);
 
     let phase = "DRAFT";
-    if (st.configured) {
-      if (st.chainNow >= st.end) phase = "ENDED";
-      else if (st.chainNow >= st.start) phase = "ACTIVE";
-      else phase = "BEFORE_START";
+    let phase_label_kh = "ដំណាក់កាលចុះឈ្មោះ";
+    let next_transition_ts = 0;
+
+    if (!st.configured) {
+      phase = "DRAFT";
+      phase_label_kh = "ដំណាក់កាលចុះឈ្មោះ";
+    } else if (st.chainNow < st.start) {
+      phase = "BEFORE_START";
+      phase_label_kh = "ដំណាក់កាលត្រួតពិនិត្យ";
+      next_transition_ts = st.start;
+    } else if (st.chainNow < st.end) {
+      phase = "ACTIVE";
+      phase_label_kh = "ដំណាក់កាលបោះឆ្នោត";
+      next_transition_ts = st.end;
+    } else {
+      phase = "ENDED";
+      phase_label_kh = "បញ្ចប់ការបោះ";
     }
 
     return res.json({
@@ -1723,11 +2077,16 @@ app.get("/api/voting-status", async (_req, res) => {
       start_ts: st.start,
       end_ts: st.end,
       chain_now_ts: st.chainNow,
+      next_transition_ts,
       phase,
-      active_chain: st.configured && st.chainNow >= st.start && st.chainNow < st.end,
+      phase_label_kh,
+      active_chain: phase === "ACTIVE",
     });
   } catch (e) {
-    return res.status(500).json({ message: "Fetch voting status failed", error: e.message });
+    return res.status(500).json({
+      message: "Fetch voting status failed",
+      error: e.message,
+    });
   }
 });
 
@@ -1812,6 +2171,15 @@ app.post("/api/official-voter-search", async (req, res) => {
 app.post("/api/document-change-request/check-new-id", async (req, res) => {
   let connection;
   try {
+    const wf = await getWorkflowStatus();
+if (!wf.allow_document_change) {
+  return res.status(403).json({
+    ok: false,
+    message: `សេវាកែប្រែឯកសារ ត្រូវបានបិទក្នុង ${wf.phase_label_kh}`,
+    phase: wf.phase,
+    phase_label_kh: wf.phase_label_kh,
+  });
+}
     const voterUuid = String(req.body?.voter_uuid || "").trim();
     const oldId = canonicalId(req.body?.old_id_number || "");
     const newId = canonicalId(req.body?.new_id_number || "");
@@ -1903,6 +2271,15 @@ app.post("/api/document-change-request", async (req, res) => {
   let connection;
   let savedPhotoPath = null;
   try {
+     const wf = await getWorkflowStatus();
+if (!wf.allow_document_change) {
+  return res.status(403).json({
+    ok: false,
+    message: `សេវាកែប្រែឯកសារ ត្រូវបានបិទក្នុង ${wf.phase_label_kh}`,
+    phase: wf.phase,
+    phase_label_kh: wf.phase_label_kh,
+  });
+}
     const voterUuid = String(req.body?.voter_uuid || "").trim();
     const oldId = canonicalId(req.body?.id_number || "");
     const newId = canonicalId(req.body?.new_document_no || "");
@@ -2191,6 +2568,14 @@ app.get("/api/admin/document-change-requests", adminRequired, async (req, res) =
 app.get("/api/admin/document-change-requests/:requestNo", adminRequired, async (req, res) => {
   let connection;
   try {
+    const wf = await getWorkflowStatus();
+if (!wf.allow_document_change) {
+  return res.status(403).json({
+    message: `Document change approval is not allowed in ${wf.phase_label_kh}`,
+    phase: wf.phase,
+    phase_label_kh: wf.phase_label_kh,
+  });
+}
     const requestNo = String(req.params.requestNo || "").trim();
     if (!requestNo) {
       return res.status(400).json({ message: "Missing request number" });
@@ -2486,6 +2871,15 @@ if (requestedEmail) {
 app.post("/api/document-change-request/check-email", async (req, res) => {
   let connection;
   try {
+    const wf = await getWorkflowStatus();
+if (!wf.allow_document_change) {
+  return res.status(403).json({
+    ok: false,
+    message: `សេវាកែប្រែឯកសារ ត្រូវបានបិទក្នុង ${wf.phase_label_kh}`,
+    phase: wf.phase,
+    phase_label_kh: wf.phase_label_kh,
+  });
+}
     const voterUuid = String(req.body?.voter_uuid || "").trim();
     const email = normalizeEmail(req.body?.email || "");
 
@@ -2522,6 +2916,113 @@ app.post("/api/document-change-request/check-email", async (req, res) => {
     try {
       if (connection) await connection.end();
     } catch {}
+  }
+});
+app.put("/api/admin/candidates/:candidateId", adminRequired, async (req, res) => {
+  try {
+    const candidateId = Number(req.params.candidateId);
+    const { name_en, name_kh, party, photo_url } = req.body || {};
+
+    if (!candidateId) {
+      return res.status(400).json({ message: "Invalid candidateId" });
+    }
+    if (!String(name_en || "").trim()) {
+      return res.status(400).json({ message: "name_en is required" });
+    }
+
+    const c = getTokenContract();
+    const wf = await getWorkflowStatus(c);
+    const eid = wf.election_id;
+
+    if (!eid) return res.status(400).json({ message: "No current election" });
+    if (!wf.allow_candidate_edit) {
+      return res.status(403).json({
+        message: `Candidate editing is not allowed in ${wf.phase_label_kh}`,
+        phase: wf.phase,
+        phase_label_kh: wf.phase_label_kh,
+      });
+    }
+
+    const tx = await c.updateCandidate(
+      eid,
+      candidateId,
+      String(name_en).trim(),
+      String(name_kh || "").trim(),
+      String(party || "").trim(),
+      String(photo_url || "").trim()
+    );
+    await tx.wait();
+
+    return res.json({
+      message: "Candidate updated",
+      election_id: eid,
+      tx_hash: tx.hash,
+    });
+  } catch (e) {
+    return res.status(500).json({
+      message: "Update candidate failed",
+      error: extractEthersError(e),
+    });
+  }
+});
+
+app.patch("/api/admin/candidates/:candidateId/status", adminRequired, async (req, res) => {
+  try {
+    const candidateId = Number(req.params.candidateId);
+    const is_active = Boolean(req.body?.is_active);
+
+    if (!candidateId) {
+      return res.status(400).json({ message: "Invalid candidateId" });
+    }
+
+    const c = getTokenContract();
+    const wf = await getWorkflowStatus(c);
+    const eid = wf.election_id;
+
+    if (!eid) return res.status(400).json({ message: "No current election" });
+    if (!wf.allow_candidate_edit) {
+      return res.status(403).json({
+        message: `Candidate status change is not allowed in ${wf.phase_label_kh}`,
+        phase: wf.phase,
+        phase_label_kh: wf.phase_label_kh,
+      });
+    }
+
+    const tx = await c.setCandidateActive(eid, candidateId, is_active);
+    await tx.wait();
+
+    return res.json({
+      message: is_active ? "Candidate enabled" : "Candidate disabled",
+      election_id: eid,
+      tx_hash: tx.hash,
+    });
+  } catch (e) {
+    return res.status(500).json({
+      message: "Change candidate status failed",
+      error: extractEthersError(e),
+    });
+  }
+});
+app.post("/api/admin/elections/draft", adminRequired, async (_req, res) => {
+  try {
+    const c = getTokenContract();
+
+    const tx = await c.createDraftElection();
+    await tx.wait();
+
+    const eid = await getCurrentElectionId(c);
+
+    return res.json({
+      message: "Draft election created",
+      election_id: eid,
+      tx_hash: tx.hash,
+    });
+  } catch (e) {
+    console.error("CREATE DRAFT ERROR:", e);
+    return res.status(500).json({
+      message: "Create draft failed",
+      error: extractEthersError(e),
+    });
   }
 });
 

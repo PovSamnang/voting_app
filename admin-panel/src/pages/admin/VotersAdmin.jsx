@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import axios from "axios";
 import QRCode from "react-qr-code";
 import { useNavigate } from "react-router-dom";
 import AdminShell from "../../components/AdminShell";
-
-const API_URL = "http://localhost:3000/api";
+import {
+  API_URL,
+  adminGet,
+  adminPut,
+  clearAdminSession,
+  isAdminAuthError,
+} from "../../utils/adminAuth";
 
 function parseFlexibleDate(value) {
   if (!value) return null;
@@ -68,6 +72,24 @@ function fmtText(v) {
   return v || "—";
 }
 
+function normalizePhotoSrc(value) {
+  const s = String(value || "").trim();
+  if (!s) return "https://via.placeholder.com/85x110";
+
+  if (s.startsWith("data:image/")) return s;
+  if (s.startsWith("http://") || s.startsWith("https://")) return s;
+  if (s.startsWith("/uploads/")) return `http://localhost:3000${s}`;
+
+  return `data:image/jpeg;base64,${s.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, "")}`;
+}
+
+function normalizeQrSrc(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+  if (s.startsWith("data:image/")) return s;
+  return `data:image/png;base64,${s.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, "")}`;
+}
+
 function VotersAdmin() {
   const navigate = useNavigate();
 
@@ -81,17 +103,34 @@ function VotersAdmin() {
   const [msg, setMsg] = useState(null);
 
   useEffect(() => {
+    const token = localStorage.getItem("admin_token");
+    if (!token) {
+      navigate("/admin/login", { replace: true });
+      return;
+    }
+
     const fetchVoters = async () => {
       try {
         setListLoading(true);
         setMsg(null);
-        const res = await axios.get(`${API_URL}/voters`);
+
+        const res = await adminGet(`${API_URL}/voters`);
         setVoters(Array.isArray(res.data) ? res.data : []);
       } catch (err) {
         console.error(err);
+
+        if (isAdminAuthError(err)) {
+          clearAdminSession();
+          navigate("/admin/login", { replace: true });
+          return;
+        }
+
         setMsg({
           type: "danger",
-          text: err?.response?.data?.message || err.message || "Failed to load voters.",
+          text:
+            err?.response?.data?.message ||
+            err?.message ||
+            "Failed to load voters.",
         });
       } finally {
         setListLoading(false);
@@ -99,7 +138,7 @@ function VotersAdmin() {
     };
 
     fetchVoters();
-  }, [refresh]);
+  }, [refresh, navigate]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -113,15 +152,32 @@ function VotersAdmin() {
     try {
       setSaveLoading(true);
       setMsg(null);
-      await axios.put(`${API_URL}/voters/${editingVoter.uuid}`, editingVoter);
+
+      await adminPut(`${API_URL}/voters/${editingVoter.uuid}`, {
+        id_number: editingVoter.id_number || "",
+        name_en: editingVoter.name_en || "",
+        name_kh: editingVoter.name_kh || "",
+        gender: editingVoter.gender || "",
+      });
+
       setEditingVoter(null);
       setRefresh((r) => !r);
       setMsg({ type: "success", text: "Voter updated successfully!" });
     } catch (error) {
       console.error(error);
+
+      if (isAdminAuthError(error)) {
+        clearAdminSession();
+        navigate("/admin/login", { replace: true });
+        return;
+      }
+
       setMsg({
         type: "danger",
-        text: error?.response?.data?.message || "Failed to update.",
+        text:
+          error?.response?.data?.message ||
+          error?.message ||
+          "Failed to update.",
       });
     } finally {
       setSaveLoading(false);
@@ -132,7 +188,7 @@ function VotersAdmin() {
   const openCard = (voter) => setViewingCard({ ...voter });
 
   const logout = () => {
-    localStorage.removeItem("admin_token");
+    clearAdminSession();
     navigate("/admin/login", { replace: true });
   };
 
@@ -687,7 +743,9 @@ function VotersAdmin() {
             <div>
               <div className="vtr-kicker">
                 <span className="vtr-kicker-line" />
-                <span className="vtr-kicker-text">Sovereign State of Cambodia</span>
+                <span className="vtr-kicker-text">
+                  Sovereign State of Cambodia
+                </span>
               </div>
               <h2 className="vtr-title-kh">បញ្ជីអ្នកបោះឆ្នោត</h2>
               <p className="vtr-title-en">National Voter Registry Console</p>
@@ -757,11 +815,14 @@ function VotersAdmin() {
                   <select
                     className="vtr-select"
                     name="gender"
-                    value={editingVoter.gender || "M"}
+                    value={editingVoter.gender || ""}
                     onChange={handleInputChange}
                   >
+                    <option value="">Select gender</option>
                     <option value="M">Male</option>
                     <option value="F">Female</option>
+                    <option value="ប្រុស">ប្រុស</option>
+                    <option value="ស្រី">ស្រី</option>
                   </select>
                 </div>
               </div>
@@ -922,14 +983,7 @@ function VotersAdmin() {
                 <div style={styles.mainRow}>
                   <div style={styles.photoBox}>
                     <img
-                      src={
-                        viewingCard.photo
-                          ? `data:image/jpeg;base64,${String(viewingCard.photo).replace(
-                              "data:image/jpeg;base64,",
-                              ""
-                            )}`
-                          : "https://via.placeholder.com/85x110"
-                      }
+                      src={normalizePhotoSrc(viewingCard.photo)}
                       alt="User"
                       style={{
                         width: "100%",
@@ -943,12 +997,16 @@ function VotersAdmin() {
                   <div style={styles.detailsCol}>
                     <div style={styles.textLine}>
                       <span style={styles.labelKh}>គោត្តនាម និងនាម: </span>
-                      <span style={styles.valueKhBold}>{viewingCard.name_kh || ""}</span>
+                      <span style={styles.valueKhBold}>
+                        {viewingCard.name_kh || ""}
+                      </span>
                     </div>
 
                     <div style={styles.textLine}>
                       <span style={{ fontSize: "12px", fontWeight: "bold" }}>
-                        {viewingCard.name_en ? viewingCard.name_en.toUpperCase() : ""}
+                        {viewingCard.name_en
+                          ? String(viewingCard.name_en).toUpperCase()
+                          : ""}
                       </span>
                     </div>
 
@@ -971,12 +1029,16 @@ function VotersAdmin() {
 
                     <div style={styles.textLine}>
                       <span style={styles.labelKh}>ទីកន្លែងកំណើត: </span>
-                      <span style={styles.valueKh}>{viewingCard.pob || "Cambodia"}</span>
+                      <span style={styles.valueKh}>
+                        {viewingCard.pob || "Cambodia"}
+                      </span>
                     </div>
 
                     <div style={styles.textLine}>
                       <span style={styles.labelKh}>អាសយដ្ឋាន: </span>
-                      <span style={styles.valueKh}>{viewingCard.address || "Phnom Penh"}</span>
+                      <span style={styles.valueKh}>
+                        {viewingCard.address || "Phnom Penh"}
+                      </span>
                     </div>
 
                     <div style={styles.textLine}>
@@ -992,11 +1054,7 @@ function VotersAdmin() {
                     <div style={styles.qrBox}>
                       {viewingCard.qrcode ? (
                         <img
-                          src={
-                            String(viewingCard.qrcode).startsWith("data:")
-                              ? viewingCard.qrcode
-                              : `data:image/png;base64,${viewingCard.qrcode}`
-                          }
+                          src={normalizeQrSrc(viewingCard.qrcode)}
                           style={{ width: "65px", height: "65px" }}
                           alt="QR"
                         />
@@ -1010,19 +1068,23 @@ function VotersAdmin() {
                 <div style={styles.mrzContainer}>
                   <div style={styles.mrzText}>
                     {viewingCard.mrz_line1 ||
-                      `IDKHM${viewingCard.id_number}<<<<<<<<<<<<<<<`}
+                      `IDKHM${viewingCard.id_number || ""}<<<<<<<<<<<<<<<`}
                   </div>
                   <div style={styles.mrzText}>
-                    {viewingCard.mrz_line2 || `9901018M3001014KHM<<<<<<<<<<<0`}
+                    {viewingCard.mrz_line2 ||
+                      `9901018M3001014KHM<<<<<<<<<<<0`}
                   </div>
                   <div style={styles.mrzText}>
                     {viewingCard.mrz_line3 ||
-                      `${(viewingCard.name_en || "").replace(/ /g, "<")}<<<<<<<<<<<<<<<`}
+                      `${String(viewingCard.name_en || "").replace(/ /g, "<")}<<<<<<<<<<<<<<<`}
                   </div>
                 </div>
               </div>
 
-              <button className="vtr-popup-close" onClick={() => setViewingCard(null)}>
+              <button
+                className="vtr-popup-close"
+                onClick={() => setViewingCard(null)}
+              >
                 Close
               </button>
             </div>

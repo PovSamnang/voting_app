@@ -4,12 +4,16 @@ import axios from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
 import AdminShell from "../../components/AdminShell";
 
-/**
- *  Admin UI + Election History Report (NO FLOW CHANGE)
- *  FIX: show candidate photo_url image in:
- *   - Candidates tab table
- *   - Report tab candidate totals table
- */
+function formatCountdown(sec) {
+  const s = Math.max(0, Number(sec || 0));
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+
+  if (days > 0) return `${days}d ${hours}h ${mins}m ${secs}s`;
+  return `${hours}h ${mins}m ${secs}s`;
+}
 
 function tsToLocalInput(tsSec) {
   if (!tsSec || tsSec <= 0) return "";
@@ -38,11 +42,20 @@ function clamp(n, min, max) {
 
 function phaseToBadge(phase) {
   const p = String(phase || "NONE").toUpperCase();
-  if (p === "ACTIVE") return { cls: "bg-success", text: "ACTIVE" };
-  if (p === "BEFORE_START") return { cls: "bg-info text-dark", text: "BEFORE START" };
-  if (p === "DRAFT") return { cls: "bg-warning text-dark", text: "DRAFT" };
-  if (p === "ENDED") return { cls: "bg-secondary", text: "ENDED" };
-  return { cls: "bg-dark", text: "NONE" };
+
+  if (p === "DRAFT") {
+    return { cls: "bg-warning text-dark", text: "ដំណាក់កាលចុះឈ្មោះ" };
+  }
+  if (p === "BEFORE_START") {
+    return { cls: "bg-info text-dark", text: "ដំណាក់កាលត្រួតពិនិត្យ" };
+  }
+  if (p === "ACTIVE") {
+    return { cls: "bg-success", text: "ដំណាក់កាលបោះឆ្នោត" };
+  }
+  if (p === "ENDED") {
+    return { cls: "bg-secondary", text: "បញ្ចប់ការបោះ" };
+  }
+  return { cls: "bg-dark", text: "មិនទាន់បើកវគ្គ" };
 }
 
 function computePhaseFrom(nowTs, configured, startTs, endTs) {
@@ -139,7 +152,9 @@ export default function ElectionAdmin() {
     start_ts: 0,
     end_ts: 0,
     chain_now_ts: 0,
+    next_transition_ts: 0,
     phase: "NONE",
+    phase_label_kh: "មិនទាន់បើកវគ្គ",
     active_chain: false,
   });
 
@@ -154,11 +169,31 @@ export default function ElectionAdmin() {
 
   const chainNowSec = Number(status.chain_now_ts || Math.floor(Date.now() / 1000));
   const phaseBadge = phaseToBadge(status.phase);
+    const hasLiveCurrent =
+    status.election_id > 0 &&
+    status.phase !== "ENDED" &&
+    status.phase !== "NONE";
+
+    const reportOptions = useMemo(() => {
+      if (hasLiveCurrent) {
+        return elections.filter(
+          (e) => Number(e.election_id) !== Number(status.election_id)
+        );
+      }
+      return elections;
+    }, [elections, hasLiveCurrent, status.election_id]);
+
+  const countdownToNext =
+    status.next_transition_ts && status.chain_now_ts
+      ? Math.max(0, status.next_transition_ts - status.chain_now_ts)
+      : 0;
 
   const canCreateDraft = status.phase === "NONE" || status.phase === "ENDED";
   const canSetPeriod = status.phase === "DRAFT" && status.election_id > 0;
-  const canAddCandidates =
-    status.election_id > 0 && (status.phase === "DRAFT" || status.phase === "BEFORE_START");
+  const canAddCandidates = status.election_id > 0 && status.phase === "DRAFT";
+  const canEditCandidates =
+    status.election_id > 0 &&
+    (status.phase === "DRAFT" || status.phase === "BEFORE_START");
 
   const logout = () => {
     localStorage.removeItem("admin_token");
@@ -179,7 +214,9 @@ export default function ElectionAdmin() {
       start_ts: Number(s.start_ts || 0),
       end_ts: Number(s.end_ts || 0),
       chain_now_ts: Number(s.chain_now_ts || s.now_ts || 0),
+      next_transition_ts: Number(s.next_transition_ts || 0),
       phase,
+      phase_label_kh: String(s.phase_label_kh || ""),
       active_chain: Boolean(s.active_chain ?? s.active ?? false),
     });
 
@@ -233,26 +270,38 @@ export default function ElectionAdmin() {
   };
 
   useEffect(() => {
-    if (!ADMIN_KEY) {
-      setMsg({ type: "danger", text: "Missing VITE_ADMIN_KEY in admin .env" });
-      return;
-    }
+  if (!ADMIN_KEY) {
+    setMsg({ type: "danger", text: "Missing VITE_ADMIN_KEY in admin .env" });
+    return;
+  }
 
+  loadVotingStatus().catch(() => {});
+  loadCurrentReport().catch(() => {});
+  loadElections().catch(() => {});
+}, [ADMIN_KEY]);
+
+useEffect(() => {
+  if (!ADMIN_KEY) return;
+
+  loadReportView(reportSel).catch(() => {});
+
+  const t = setInterval(() => {
     loadVotingStatus().catch(() => {});
     loadCurrentReport().catch(() => {});
     loadElections().catch(() => {});
-    loadReportView("current").catch(() => {});
+    loadReportView(reportSel).catch(() => {});
+  }, 3000);
 
-    const t = setInterval(() => {
-      loadVotingStatus().catch(() => {});
-      loadCurrentReport().catch(() => {});
-      loadElections().catch(() => {});
-      if (reportSel === "current") loadReportView("current").catch(() => {});
-    }, 3000);
+  return () => clearInterval(t);
+}, [ADMIN_KEY, reportSel]);
 
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ADMIN_KEY, reportSel]);
+    useEffect(() => {
+  if (!status.election_id) return;
+
+  if (status.phase === "ENDED" && reportSel === "current") {
+    setReportSel(String(status.election_id));
+  }
+}, [status.phase, status.election_id, reportSel]);
 
   const createDraftElection = async () => {
     setMsg(null);
@@ -261,7 +310,7 @@ export default function ElectionAdmin() {
       const res = await api.post("/admin/elections/draft");
       setMsg({
         type: "success",
-        text: `Draft election created  (ID: ${res.data?.election_id ?? "?"})`,
+        text: `Draft election created (ID: ${res.data?.election_id ?? "?"})`,
       });
       setCandForm({ name_en: "", name_kh: "", party: "", photo_url: "" });
       setPeriod({ startLocal: "", endLocal: "" });
@@ -291,16 +340,18 @@ export default function ElectionAdmin() {
     const start_ts = localInputToTsSec(period.startLocal);
     const end_ts = localInputToTsSec(period.endLocal);
 
-    if (!start_ts || !end_ts)
+    if (!start_ts || !end_ts) {
       return setMsg({ type: "danger", text: "Please select valid Start and End datetime." });
-    if (end_ts <= start_ts)
+    }
+    if (end_ts <= start_ts) {
       return setMsg({ type: "danger", text: "End time must be after Start time." });
+    }
 
     try {
       setBusy(true);
       await api.post("/admin/elections", { start_ts, end_ts });
 
-      setMsg({ type: "success", text: "Election period set " });
+      setMsg({ type: "success", text: "Election period set" });
 
       await loadVotingStatus();
       await loadCurrentReport();
@@ -323,10 +374,12 @@ export default function ElectionAdmin() {
     e.preventDefault();
     setMsg(null);
 
-    if (!candForm.name_en.trim())
+    if (!candForm.name_en.trim()) {
       return setMsg({ type: "danger", text: "name_en is required" });
-    if (!status.election_id)
+    }
+    if (!status.election_id) {
       return setMsg({ type: "danger", text: "Create draft election first." });
+    }
 
     try {
       setBusy(true);
@@ -339,7 +392,7 @@ export default function ElectionAdmin() {
 
       setMsg({
         type: "success",
-        text: `Candidate added  ${res.data?.tx_hash ? `(TX: ${res.data.tx_hash})` : ""}`,
+        text: `Candidate added ${res.data?.tx_hash ? `(TX: ${res.data.tx_hash})` : ""}`,
       });
 
       setCandForm({ name_en: "", name_kh: "", party: "", photo_url: "" });
@@ -381,11 +434,10 @@ export default function ElectionAdmin() {
       : computePhaseFrom(chainNowSec, viewConfigured, viewStart, viewEnd);
   const viewPhaseBadge = phaseToBadge(viewPhase);
 
-  const onChangeReportSel = async (v) => {
-    setMsg(null);
-    setReportSel(v);
-    await loadReportView(v);
-  };
+  const onChangeReportSel = (v) => {
+  setMsg(null);
+  setReportSel(v);
+};
 
   const votedList = reportView?.votersRegisteredVoted || reportView?.votersVoted || [];
 
@@ -865,8 +917,11 @@ export default function ElectionAdmin() {
               <p className="ea-title-en">Official Election Administration Console</p>
 
               <div className="ea-flow">
-                Flow: <b>1) Create Draft</b> → <b>2) Add Candidates</b> → <b>3) Set Period</b> →{" "}
-                <b>4) Monitor Report</b> → <b>5) After End, create next Draft</b>
+                <b>មុនវគ្គបោះឆ្នោត</b>: ស្វែងរកឈ្មោះ និងស្នើកែប្រែឯកសារ →{" "}
+                <b>ដំណាក់កាលចុះឈ្មោះ</b>: ស្នើ token និងបន្ថែមបេក្ខជន →{" "}
+                <b>ដំណាក់កាលត្រួតពិនិត្យ</b>: រង់ចាំ / រាប់ថយក្រោយ / កែឬបិទបេក្ខជន →{" "}
+                <b>ដំណាក់កាលបោះឆ្នោត</b>: បោះឆ្នោត និងមើលលទ្ធផលផ្ទាល់ →{" "}
+                <b>បញ្ចប់ការបោះ</b>: មើលរបាយការណ៍ និងប្រវត្តិ
               </div>
             </div>
 
@@ -879,6 +934,18 @@ export default function ElectionAdmin() {
               <div className="ea-status-meta mb-2">
                 Election ID: <b>#{status.election_id || "—"}</b>
               </div>
+
+              {status.phase === "BEFORE_START" && (
+                <div className="ea-status-meta mb-2">
+                  ចាប់ផ្ដើមបោះឆ្នោតក្នុង៖ <b>{formatCountdown(countdownToNext)}</b>
+                </div>
+              )}
+
+              {status.phase === "ACTIVE" && (
+                <div className="ea-status-meta mb-2">
+                  បិទការបោះឆ្នោតក្នុង៖ <b>{formatCountdown(countdownToNext)}</b>
+                </div>
+              )}
 
               <div className="ea-refresh">Auto refresh: every 3s</div>
             </div>
@@ -915,6 +982,18 @@ export default function ElectionAdmin() {
                 <div className="mt-2 small text-muted">
                   Chain now: <b>{fmtTs(status.chain_now_ts)}</b>
                 </div>
+
+                {status.phase === "BEFORE_START" && (
+                  <div className="mt-2 small text-muted">
+                    Voting starts in: <b>{formatCountdown(countdownToNext)}</b>
+                  </div>
+                )}
+
+                {status.phase === "ACTIVE" && (
+                  <div className="mt-2 small text-muted">
+                    Voting ends in: <b>{formatCountdown(countdownToNext)}</b>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1081,7 +1160,8 @@ export default function ElectionAdmin() {
                 </div>
               ) : !canAddCandidates ? (
                 <div className="alert alert-warning">
-                  Candidates are locked because election is <b>{status.phase}</b>.
+                  Adding candidates is locked because election is <b>{phaseBadge.text}</b>.
+                  {canEditCandidates ? " You may still edit/disable candidates in this phase if you add that UI later." : ""}
                 </div>
               ) : null}
 
@@ -1196,19 +1276,24 @@ export default function ElectionAdmin() {
                 <div className="d-flex flex-wrap gap-2 align-items-center">
                   <div className="ea-muted-note">View:</div>
                   <select
-                    className="form-select ea-select"
-                    style={{ width: 320 }}
-                    value={reportSel}
-                    disabled={busy}
-                    onChange={(e) => onChangeReportSel(e.target.value)}
-                  >
-                    <option value="current">Current (Live)</option>
-                    {elections.map((e) => (
-                      <option key={e.election_id} value={String(e.election_id)}>
-                        {`Election #${e.election_id} (${String(e.phase || "").toUpperCase() || "—"})`}
-                      </option>
-                    ))}
-                  </select>
+  className="form-select ea-select"
+  style={{ width: 320 }}
+  value={reportSel}
+  disabled={busy}
+  onChange={(e) => onChangeReportSel(e.target.value)}
+>
+  {hasLiveCurrent && (
+    <option value="current">
+      {`Current (Live) #${status.election_id}`}
+    </option>
+  )}
+
+  {reportOptions.map((e) => (
+    <option key={e.election_id} value={String(e.election_id)}>
+      {`Election #${e.election_id} (${String(e.phase || "").toUpperCase() || "—"})`}
+    </option>
+  ))}
+</select>
 
                   <button
                     className="btn ea-btn-light"
@@ -1229,7 +1314,7 @@ export default function ElectionAdmin() {
                   Viewing:{" "}
                   {reportSel === "current"
                     ? `Current #${status.election_id || "—"}`
-                    : `Election #${reportSel}`}
+                    : `History Election #${reportSel}`}
                 </span>
                 <span className={`badge ${viewPhaseBadge.cls}`}>{viewPhaseBadge.text}</span>
               </div>

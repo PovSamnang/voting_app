@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'home_screen.dart';
 import 'candidate_list_screen.dart';
 import 'profile_screen.dart';
+import 'result_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -18,6 +19,7 @@ class _MainScreenState extends State<MainScreen> {
   final List<Widget> _pages = const [
     HomeScreen(),
     CandidateListScreen(),
+    ResultScreen(),
     ProfileScreen(),
   ];
 
@@ -56,15 +58,19 @@ class _MainScreenState extends State<MainScreen> {
                 items: const [
                   BottomNavigationBarItem(
                     icon: Icon(Icons.home_rounded),
-                    label: "Home",
+                    label: "ទំព័រដើម",
                   ),
                   BottomNavigationBarItem(
                     icon: Icon(Icons.how_to_vote_rounded),
-                    label: "Vote",
+                    label: "បោះឆ្នោត",
+                  ),
+                  BottomNavigationBarItem(
+                    icon: Icon(Icons.bar_chart_rounded),
+                    label: "លទ្ធផល",
                   ),
                   BottomNavigationBarItem(
                     icon: Icon(Icons.person_rounded),
-                    label: "Profile",
+                    label: "គណនី",
                   ),
                 ],
               ),
@@ -78,15 +84,11 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // makes the nav feel floating (content can extend behind it)
       extendBody: true,
-
-      // keeps page state when switching tabs
       body: IndexedStack(
         index: _selectedIndex,
         children: _pages,
       ),
-
       bottomNavigationBar: _styledBottomNav(),
     );
   }
